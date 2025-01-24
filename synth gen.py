@@ -6,11 +6,11 @@ gender_dist = ["Male", "Female"]
 gender_probs = [0.55, 0.45]  # real-world approximation
 
 program_list = [
-    "Computer Science",
-    "Computer Science (Special)",
-    "Computer Science with Management",
-    "Information Technology",
-    "Information Technology (Special)",
+    "BSc. Computer Science",
+    "BSc. Computer Science (Special)",
+    "BSc. Computer Science with Management",
+    "BSc. Information Technology",
+    "BSc. Information Technology (Special)",
 ]
 # Example probabilities (must sum to 1)
 program_probs = [0.30, 0.25, 0.10, 0.25, 0.10]  # Adjusted to six probabilities
