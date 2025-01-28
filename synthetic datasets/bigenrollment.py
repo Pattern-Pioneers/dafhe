@@ -1,6 +1,7 @@
 import pandas as pd
 import random
 from faker import Faker
+import calendar
 
 # Initialize Faker
 fake = Faker()
@@ -43,7 +44,10 @@ for year in years:
         dob_year = year - random.randint(17, 22)
         dob_month = random.randint(1, 12)
         # Generate a valid date of birth
-        dob = fake.date_of_birth(minimum_age=17, maximum_age=22).replace(year=dob_year, month=dob_month).strftime("%m-%Y")
+        dob = fake.date_of_birth(minimum_age=17, maximum_age=22)
+        valid_day = min(dob.day, calendar.monthrange(dob_year, dob_month)[1])
+        dob = dob.replace(year=dob_year, month=dob_month, day=valid_day).strftime("%m-%Y")
+        
         gender = random.choice(gender_distribution)
         nationality = "Trinidad and Tobago"
         address = random.choice(cities)
