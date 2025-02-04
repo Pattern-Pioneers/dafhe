@@ -1,11 +1,14 @@
 import random
 from datetime import datetime, timedelta
 import csv
+import pandas as pd
+import faker
 
 def generate_random_date(start_year, end_year):
-    start_date = datetime(year=start_year, month=1, day=1)
-    end_date = datetime(year=end_year, month=12, day=31)
-    random_date = start_date + timedelta(days=random.randint(0, (end_date - start_date).days))
+    fake = faker.Faker()
+    start_date = datetime(start_year, 1, 1)
+    end_date = datetime(end_year, 12, 31)
+    random_date = fake.date_between(start_date=start_date, end_date=end_date)
     return random_date.strftime("%d/%m/%Y")
 
 def generate_student_data(num_students):
@@ -18,10 +21,18 @@ def generate_student_data(num_students):
         year = random.randint(2000, 2004)
         semester = random.choices(['10', '20', '30'], weights=[8, 1, 1])[0]  # Bias towards Semester 1
         admit_terms.append(int(f"{year}1{semester}"))
+    
+    # Load the world cities data
+    worldcities_df = pd.read_csv(r"synthetic datasets/worldcities.csv")
+    
+    # Extract unique cities, states, and nations (using iso3)
+    cities = worldcities_df["city"].unique().tolist()
+    states = worldcities_df["admin_name"].unique().tolist()
+    nations = worldcities_df["iso3"].unique().tolist()
+    
+    # Ensure at least 92% of the students are from Trinidad and Tobago (using iso3 code TTO)
+    weighted_nations = ["TTO"] * 92 + nations
 
-    cities = ["Port of Spain", "San Fernando", "Scarborough", "Bridgetown", "Kingston", "Nassau", "Havana"]
-    states = ["Trinidad", "Tobago", "Barbados", "Jamaica", "Bahamas", "Cuba"]
-    nations = ["Trinidad and Tobago", "Barbados", "Jamaica", "Bahamas", "Cuba", "Guyana", "Suriname"]
     genders = ["M", "F"]
     religions = ["Christian", "Seventh-Day Adventist", "Spiritual Baptist", "Pentecostal", "Roman Catholic", 
                  "Muslim", "Hindu", "Rastafarian", "Buddhist"]
@@ -36,10 +47,22 @@ def generate_student_data(num_students):
         student_id = student_ids[i]
         admit_term = admit_terms[i]
         birth_date = generate_random_date(1975, 1990)
-        city = random.choice(cities)
-        state = random.choice(states)
-        nation = random.choice(nations)
-        gender = random.choice(genders)
+
+        # Choose a nation first
+        nation = random.choice(weighted_nations)
+
+        # Filter worldcities_df for the chosen nation; assuming the ISO3 field is "iso3"
+        nation_cities = worldcities_df[worldcities_df["iso3"] == nation]
+        if not nation_cities.empty:
+            chosen_city = nation_cities.sample(1).iloc[0]
+            city = chosen_city["city"]
+            state = chosen_city["admin_name"]
+        else:
+            # Fallback if no cities are found for nation
+            city = random.choice(cities)
+            state = random.choice(states)
+
+        gender = random.choices(genders, weights=[4, 6])[0]  # Skewed to 60% female
         religion = random.choice(religions)
         marital_status = random.choice(marital_statuses)
         faculty_code = "FST"
@@ -48,6 +71,7 @@ def generate_student_data(num_students):
         # Generate multiple records for each student
         num_semesters = random.choices([6, 7, 8], weights=[5, 3, 2])[0]  # Bias towards 6 semesters
         start_year = int(str(admit_term)[:4])
+
         for j in range(num_semesters):
             term_code_eff = int(term_codes[(start_year - 2000) * 3 + j % 3])
             student_record = {
@@ -75,13 +99,13 @@ def save_to_csv(student_data, filename):
         "MARITAL_STATUS", "FACULTY_CODE", "STU_DEGREE_CODE"
     ]
 
-    with open(filename, mode='w', newline='') as file:
+    with open(filename, mode='w', newline='', encoding='utf-8') as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(student_data)
 
-# Generate data for 100 students
-students = generate_student_data(100)
+# Generate data for n students
+students = generate_student_data(500)
 
 # Save the generated data to a CSV file
 save_to_csv(students, 'university_registration_data.csv')
