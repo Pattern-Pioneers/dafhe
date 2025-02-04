@@ -1,155 +1,89 @@
-import pandas as pd
 import random
-from faker import Faker
-import calendar
+from datetime import datetime, timedelta
+import csv
 
-# Initialize Faker and seed for reproducibility
-fake = Faker()
-Faker.seed(-1)
-random.seed(-1)
+def generate_random_date(start_year, end_year):
+    start_date = datetime(year=start_year, month=1, day=1)
+    end_date = datetime(year=end_year, month=12, day=31)
+    random_date = start_date + timedelta(days=random.randint(0, (end_date - start_date).days))
+    return random_date.strftime("%d/%m/%Y")
 
-# Define the degree programs, cities, and qualifications
-degree_programs = [
-    "CS-MAJ", # Computer Science Major
-    "CS-SPE", # Computer Science (Special)
-    "CS-MAN", # Computer Science with Management
-    "CS-MSP", # Computer Science with Management (Special)
-    "IT-MAJ", # Information Technology Major
-    "IT-SPE", # Information Technology (Special)
-    "IT-MAN", # Information Technology with Management
-]
+def generate_student_data(num_students):
+    student_data = []
+    student_ids = random.sample(range(318000000, 318999999), num_students)
 
-cities = [
-    "Port of Spain",
-    "San Fernando",
-    "Arima",
-    "Chaguanas",
-    "Couva",
-    "Point Fortin",
-    "Sangre Grande",
-    "Tunapuna",
-    "Siparia",
-    "Penal",
-]
+    # Predefined data
+    admit_terms = []
+    for _ in range(num_students):
+        year = random.randint(2000, 2004)
+        semester = random.choices(['10', '20', '30'], weights=[8, 1, 1])[0]  # Bias towards Semester 1
+        admit_terms.append(int(f"{year}1{semester}"))
 
-# Gender distribution based on real-world trends
-gender_distribution = ["Male"] * 40 + ["Female"] * 60
+    cities = ["Port of Spain", "San Fernando", "Scarborough", "Bridgetown", "Kingston", "Nassau", "Havana"]
+    states = ["Trinidad", "Tobago", "Barbados", "Jamaica", "Bahamas", "Cuba"]
+    nations = ["Trinidad and Tobago", "Barbados", "Jamaica", "Bahamas", "Cuba", "Guyana", "Suriname"]
+    genders = ["M", "F"]
+    religions = ["Christian", "Seventh-Day Adventist", "Spiritual Baptist", "Pentecostal", "Roman Catholic", 
+                 "Muslim", "Hindu", "Rastafarian", "Buddhist"]
+    marital_statuses = ["Single", "Married", "Common-Law", "Separated", "Divorced"]
+    degree_codes = ["CS-MAJO", "CS-SPEC", "CS-MANA", "CS-MASP", "IT-MAJO", "IT-SPEC"]
 
-# Remove year_enrollment_data declaration since we're now using degree_enrollment.csv
-# New: Load degree enrollment statistics from CSV to ground the dataset generation realistically
-csv_path = "synthetic datasets\degree_enrollment.csv"
-df_degrees = pd.read_csv(csv_path)
-csv_to_program = {
-    "CS-MAJO": "CS-MAJO",
-    "CS-SPEC": "CS-SPEC",
-    "CS-MANA": "CS-MANA",
-    "CS-MASP": "CS-MASP",
-    "IT-MAJO": "IT-MAJO",
-    "IT-SPEC": "IT-SPEC",
-}
+    term_codes = []
+    for year in range(2000, 2005):
+        term_codes.extend([f"{year}10", f"{year}20", f"{year}30"]) #keep
 
-degree_yearly_enrollment = {}
+    for i in range(num_students):
+        student_id = student_ids[i]
+        admit_term = admit_terms[i]
+        birth_date = generate_random_date(1975, 1990)
+        city = random.choice(cities)
+        state = random.choice(states)
+        nation = random.choice(nations)
+        gender = random.choice(genders)
+        religion = random.choice(religions)
+        marital_status = random.choice(marital_statuses)
+        faculty_code = "FST"
+        degree_code = random.choice(degree_codes)
 
-for _, row in df_degrees.iterrows():
-    year_val = int(row["year"])
-    degree_yearly_enrollment[year_val] = {}
-    for csv_col, prog in csv_to_program.items():
-        val = row[csv_col]
-        count = 0 if (val == '-' or pd.isna(val)) else int(val)
-        degree_yearly_enrollment[year_val][prog] = count
-    # For missing degree code in CSV, assign 0 (e.g. IT-MAN)
-    degree_yearly_enrollment[year_val]["IT-MAN"] = 0
+        # Generate multiple records for each student
+        num_semesters = random.choices([6, 7, 8], weights=[5, 3, 2])[0]  # Bias towards 6 semesters
+        start_year = int(str(admit_term)[:4])
+        for j in range(num_semesters):
+            term_code_eff = int(term_codes[(start_year - 2000) * 3 + j % 3])
+            student_record = {
+                "STUDENT_ID": student_id,
+                "TERM_CODE_EFF": term_code_eff,
+                "TERM_CODE_ADMIT": admit_term,
+                "DATE_OF_BIRTH": birth_date,
+                "CITY": city,
+                "STATE": state,
+                "NATION": nation,
+                "GENDER": gender,
+                "RELIGION": religion,
+                "MARITAL_STATUS": marital_status,
+                "FACULTY_CODE": faculty_code,
+                "STU_DEGREE_CODE": degree_code
+            }
+            student_data.append(student_record)
 
-# List of enrollment years
-years = list(range(2000, 2024))
+    return student_data
 
-records = []
+def save_to_csv(student_data, filename):
+    fieldnames = [
+        "STUDENT_ID", "TERM_CODE_EFF", "TERM_CODE_ADMIT", "DATE_OF_BIRTH",
+        "CITY", "STATE", "NATION", "GENDER", "RELIGION",
+        "MARITAL_STATUS", "FACULTY_CODE", "STU_DEGREE_CODE"
+    ]
 
-def generate_student_id():
-    return int("308" + ''.join(str(random.randint(0, 9)) for _ in range(6)))
-    
-student_id_set = set()  # Keep track of used IDs to avoid duplicates
+    with open(filename, mode='w', newline='') as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(student_data)
 
-for year in years:
-    if year in degree_yearly_enrollment:
-        # For years with degree-specific counts, generate records per degree
-        for degree_code, count in degree_yearly_enrollment[year].items():
-            for _ in range(count):
-                # Generate unique student ID
-                while True:
-                    student_id = generate_student_id()
-                    if student_id not in student_id_set:
-                        student_id_set.add(student_id)
-                        break
+# Generate data for 100 students
+students = generate_student_data(100)
 
-                # Generate date of birth ensuring age is between 17 and 22 at enrollment
-                age_at_enrollment = random.randint(17, 24)
-                dob_year = year - age_at_enrollment
-                dob_month = random.randint(1, 12)
-                dob_date = fake.date_of_birth(minimum_age=17, maximum_age=22)
-                valid_day = min(dob_date.day, calendar.monthrange(dob_year, dob_month)[1])
-                dob_formatted = dob_date.replace(year=dob_year, month=dob_month, day=valid_day).strftime("%m-%Y")
-                
-                gender = random.choice(gender_distribution)
-                
-                address = random.choice(cities)
-                
-                # Use the specific degree_code from the dictionary
-                
-                # Nationality distribution remains the same
-                nationalities = (
-                    ["Trinidad and Tobago"] * 923
-                    + [
-                        "Anguilla",
-                        "Antigua and Barbuda",
-                        "Barbados",
-                        "Belize",
-                        "British Virgin Islands",
-                        "Dominica",
-                        "Grenada",
-                        "Guyana",
-                        "Jamaica",
-                        "Monsterrat",
-                        "St. Kitts and Nevis",
-                        "St. Lucia",
-                        "St. Vincent and the Grenadines",
-                        "The Bahamas",
-                        "Turks and Caicos Islands",
-                    ] * 8
-                    + [
-                        "United States",
-                        "Canada",
-                        "Nigeria",
-                        "India",
-                    ] * 2
-                )
-                nationality = random.choice(nationalities)
-                
-                record = (
-                    student_id,
-                    dob_formatted,
-                    gender,
-                    nationality,
-                    address,
-                    degree_code,
-                    year,
-                )
-                records.append(record)
-    continue
+# Save the generated data to a CSV file
+save_to_csv(students, 'university_registration_data.csv')
 
-# Define the column names for the CSV
-columns = [
-    "STUDENT_ID",
-    "DATE_OF_BIRTH",
-    "GENDER",
-    "NATIONALITY",
-    "ADDRESS",
-    "STU_DEGREE_CODE",
-    "TERM_CODE_ADMIT",
-]
-
-# Create a DataFrame and write it to CSV
-df = pd.DataFrame(records, columns=columns)
-df.to_csv("bigen_fancy.csv", index=False)
-
-print("bigen_fancy.csv successfully generated!")
+print("Data has been generated and saved to university_registration_data.csv")
