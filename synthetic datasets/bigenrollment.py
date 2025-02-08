@@ -1,182 +1,170 @@
-"""
-- Generates synthetic student IDs and admission records
-- Uses real world city/country data for addresses
-- Simulates realistic enrollment patterns across semesters
-- Maintains demographic distributions (e.g. 60% female students)
-- Outputs data in CSV format suitable for database import
-"""
-
-import random
-from datetime import datetime
 import csv
-import pandas as pd
+import random
+from datetime import date
 import faker
+import pandas as pd
 
-def generate_random_date(start_year, end_year):
+def generate_student_ids(num_students):
     """
-    Generate a random date between two years.
-    
-    Args:
-        start_year (int): The earliest possible year
-        end_year (int): The latest possible year
-    
-    Returns:
-        str: A date string in DD/MM/YYYY format
+    Generate a set of unique 9-digit IDs in the range 318000000 to 318999999.
     """
-    fake = faker.Faker()
-    start_date = datetime(start_year, 1, 1)
-    end_date = datetime(end_year, 12, 31)
-    random_date = fake.date_between(start_date=start_date, end_date=end_date)
-    return random_date.strftime("%d/%m/%Y")
+    possible_ids = list(range(318000000, 318999999))
+    random.shuffle(possible_ids)
+    return possible_ids[:num_students]
 
-def generate_student_data(num_students):
-    """
-    Generate synthetic student registration records.
-    
-    Args:
-        num_students (int): Number of unique students to generate
-    
-    Returns:
-        list: List of dictionaries containing student records with multiple semesters per student
-    
-    Note:
-        - Student IDs are unique 9-digit numbers starting with 318
-        - 92% of students are from Trinidad and Tobago (TTO)
-        - Gender distribution is skewed 60% female
-        - Most students complete in 6 semesters (some take 7-8)
-    """
-    student_data = []
-    student_ids = random.sample(range(318000000, 318999999), num_students)
+fake = faker.Faker()
 
-    # Predefined data
-    admit_terms = []
-    for _ in range(num_students):
-        year = random.randint(2000, 2004)
-        semester = random.choices(['10', '20', '30'], weights=[8, 1, 1])[0]  # Bias towards Semester 1
-        admit_terms.append(int(f"{year}1{semester}"))
+def generate_dob(admit_year):
+    """
+    Generate a realistic DOB based on the admission year,
+    skewed so 90% of students are enrolling somewhere in the 18-24 age range.
+    Returns date in YYYY-MM-DD format.
+    """
+    if random.random() < 0.90:
+        # About 90% of students are between 18 and 24 at admission time
+        age_at_admission = random.randint(18, 24)
+        birth_year = admit_year - age_at_admission
+    else:
+        if random.random() < 0.5:
+            birth_year = admit_year - random.randint(16, 17)  # 16 or 17
+        else:
+            birth_year = admit_year - random.randint(25, 45)  # 25 to 45
+
+    start_date = date(birth_year, 1, 1)
+    end_date = date(birth_year, 12, 31)
+    return fake.date_between(start_date=start_date, end_date=end_date).strftime("%Y-%m-%d")  # Changed format here
+
+def get_next_term(year, sem):
+    """
+    Move to the next semester. 
+    If sem == 3, move to the next year and reset sem to 1.
+    Otherwise, increment sem by 1.
+    """
+    if sem == 3:
+        return year + 1, 1
+    else:
+        return year, sem + 1
+
+def generate_term_codes(admit_year, admit_sem):
+    """
+    Generate a list of TERM_CODE_EFF values from admission to completion.
+    Typical completion is 6 semesters, but a portion may go up to 9 semesters.
+    """
+    # Weighted distribution:
+    # ~60% -> 6 semesters
+    # ~25% -> 7 semesters
+    # ~10% -> 8 semesters
+    # ~5%  -> 9 semesters
+    r = random.random()
+    if r < 0.60:
+        total_semesters = 6
+    elif r < 0.85:
+        total_semesters = 7
+    elif r < 0.95:
+        total_semesters = 8
+    else:
+        total_semesters = 9
+
+    term_codes = []
+    year = admit_year
+    sem = admit_sem
+    for _ in range(total_semesters):
+        term_codes.append(f"{year}{sem}0")  # (YYYY)(Sem)0, e.g. 201610
+        year, sem = get_next_term(year, sem)
+    return term_codes
+
+def main():
+    random.seed(42)  # For reproducibility
+    num_students = 10000  # Adjust the number of students as needed
+    student_ids = generate_student_ids(num_students)
     
-    # Load the world cities data
-    worldcities_df = pd.read_csv(r"synthetic datasets/worldcities.csv")
-    
-    # Extract unique cities, states, and nations (using iso3)
+    # Load world cities data and compute selection lists
+    worldcities_df = pd.read_csv("synthetic datasets/worldcities.csv")
     cities = worldcities_df["city"].unique().tolist()
     states = worldcities_df["admin_name"].unique().tolist()
     nations = worldcities_df["iso3"].unique().tolist()
-    countries = worldcities_df["country"].unique().tolist()  # new extraction of country names
-    
-    #TODO review skew code for contributing countries
-    # Ensure at least 92% of the students are from TTO
-    weighted_nations = ["TTO"] * 92 + nations
-    tto_ratio = 92
-    total_remaining = 100 - tto_ratio
+    countries = worldcities_df["country"].unique().tolist()
 
-    # Create dictionary of country ratios from 2022 data (excluding TTO)
+    # Load country stats for skewing nationality
     country_stats = pd.read_csv("synthetic datasets/country_stats.csv")
     country_stats = country_stats[country_stats['country_iso3'] != 'TTO']
     country_stats = country_stats[country_stats['country_iso3'] != 'UG_TOTAL']
-
-    # Calculate proportions based on 2022 values
-    total_2022 = country_stats['2022'].sum()
-    country_weights = []
-
-    for country in nations:
-        if country == 'TTO':
-            continue
-        matches = country_stats[country_stats['country_iso3'] == country]
-        if not matches.empty and not pd.isna(matches['2022'].iloc[0]):
-            weight = int((matches['2022'].iloc[0] / total_2022) * total_remaining)
-            country_weights.extend([country] * max(weight, 1))
-
-    weighted_nations = ["TTO"] * tto_ratio + country_weights
-
-    genders = ["M", "F"]
-    religions = ["N/A", "Other", "None", "Christian", "Seventh-Day Adventist", "Spiritual Baptist", "Pentecostal", "Roman Catholic", 
-                 "Muslim", "Hindu", "Rastafarian", "Buddhist", "Wesleyan", "Jehovah's Witness", "Ethiopian Orthodox",
-                 "Islam", "Presbyterian", "Methodist", "Anglican", "Brethren", "Baha'i", 
-                 "Church of Christ", "Baptist", "Evangelical Church", "Nazarene", "Moravian", "Church of God"]
     
-    		
-    
-    marital_statuses = ["Single", "Married", "Common-Law", "Separated", "Divorced"]
-    degree_codes = ["CS-MAJO", "CS-SPEC", "CS-MANA", "CS-MASP", "IT-MAJO", "IT-SPEC"]
+    # Define admission year range and other attributes
+    min_year_admit = 2000
+    max_year_admit = 2024
+    marital_status_options = ["Single", "Married", "Common-Law", "Separated", "Divorced", "Other"]
+    gender_options = ["F"] * 60 + ["M"] * 40
+    religion_options = [ "N/A", "Other", "None", "Christian", "Seventh-Day Adventist", "Spiritual Baptist", "Pentecostal", "Roman Catholic", 
+                         "Muslim", "Hindu", "Rastafarian", "Buddhist", "Wesleyan", "Jehovah's Witness", "Ethiopian Orthodox",
+                         "Islam", "Presbyterian", "Methodist", "Anglican", "Brethren", "Baha'i", 
+                         "Church of Christ", "Baptist", "Evangelical Church", "Nazarene", "Moravian", "Church of God"]
+    degree_codes = ["CS-MAJO", "CS-SPEC", "CS-MANA", "IT-MAJO", "IT-SPEC"]
 
-    term_codes = []
-    for year in range(2000, 2005):
-        term_codes.extend([f"{year}10", f"{year}20", f"{year}30"]) #TODO this is hardcoded for 3 semesters across 5 years
+    with open("25years.csv", mode="w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow([
+            "STUDENT_ID", "TERM_CODE_EFF", "TERM_CODE_ADMIT", "DATE_OF_BIRTH",
+            "CITY", "STATE", "NATION", "GENDER", "RELIGION",
+            "MARITAL_STATUS", "FACULTY_CODE", "STU_DEGREE_CODE"
+        ])
 
-    for i in range(num_students):
-        student_id = student_ids[i]
-        admit_term = admit_terms[i]
-        birth_date = generate_random_date(1975, 1990)
+        for sid in student_ids:
+            admit_year = random.randint(min_year_admit, max_year_admit)
+            term_code_admit = f"{admit_year}10"
+            admit_sem = 1
+            term_codes = generate_term_codes(admit_year, admit_sem)
+            dob = generate_dob(admit_year)
+            gender = random.choice(gender_options)
+            religion = random.choice(religion_options)
+            marital_status = random.choice(marital_status_options)
+            faculty_code = "FST"
+            degree_code = random.choice(degree_codes)
+            
+            # Select nation based on real-world skew:
+            r = random.random()
+            if r < 0.923:
+                chosen_nation = "TTO"
+            elif r < 0.965:  # Next 4.2%
+                contrib_df = country_stats[(country_stats['contributing_country'] == 'Y') & (country_stats['country_iso3'] != 'TTO')]
+                if not contrib_df.empty:
+                    chosen_nation = contrib_df.sample(weights=contrib_df['2022'], random_state=random.randint(0,100000)).iloc[0]['country_iso3']
+                else:
+                    chosen_nation = random.choice(nations)
+            else:
+                noncontrib_df = country_stats[(country_stats['contributing_country'] != 'Y') & (country_stats['country_iso3'] != 'TTO')]
+                if not noncontrib_df.empty:
+                    chosen_nation = noncontrib_df.sample(weights=noncontrib_df['2022'], random_state=random.randint(0,100000)).iloc[0]['country_iso3']
+                else:
+                    chosen_nation = random.choice(nations)
+            
+            nation_cities = worldcities_df[worldcities_df["iso3"] == chosen_nation]
+            if not nation_cities.empty:
+                record = nation_cities.sample(1).iloc[0]
+                city = record["city"]
+                state = record["admin_name"]
+                nation_value = record["country"]
+            else:
+                city = random.choice(cities)
+                state = random.choice(states)
+                nation_value = random.choice(countries)
+            
+            # Write a record for each semester
+            for term_eff in term_codes:
+                writer.writerow([
+                    sid,
+                    term_eff,
+                    term_code_admit,
+                    dob,
+                    city,
+                    state,
+                    nation_value,
+                    gender,
+                    religion,
+                    marital_status,
+                    faculty_code,
+                    degree_code
+                ])
 
-        # Choose a nation first
-        nation = random.choice(weighted_nations)
-
-        # Filter worldcities_df for the chosen nation so cities are accurate
-        nation_cities = worldcities_df[worldcities_df["iso3"] == nation]
-        if not nation_cities.empty:
-            chosen_city = nation_cities.sample(1).iloc[0]
-            city = chosen_city["city"]
-            state = chosen_city["admin_name"] 
-            country = chosen_city["country"]  # new: get country name from record
-        else:
-            # Fallback if no cities are found for nation
-            city = random.choice(cities)
-            state = random.choice(states)
-            country = random.choice(countries)  # new fallback for country
-
-        gender = random.choices(genders, weights=[4, 6])[0]  # Skewed to 60% female
-        religion = random.choice(religions)
-        marital_status = random.choice(marital_statuses)
-        faculty_code = "FST"  #TODO note we are focusing on FST students alone for now at least
-        degree_code = random.choice(degree_codes)
-
-        # Generate multiple records for each student
-        num_semesters = random.choices([6, 7, 8], weights=[5, 3, 2])[0]  # Bias towards 6 semesters
-        start_year = int(str(admit_term)[:4])
-
-        for j in range(num_semesters):
-            term_code_eff = int(term_codes[(start_year - 2000) * 3 + j % 3])
-            student_record = {
-                "STUDENT_ID": student_id,
-                "TERM_CODE_EFF": term_code_eff,
-                "TERM_CODE_ADMIT": admit_term,
-                "DATE_OF_BIRTH": birth_date,
-                "CITY": city,
-                "STATE": state,
-                "NATION_ISO3": nation,
-                "NATION_NAME": country,
-                "GENDER": gender,
-                "RELIGION": religion,
-                "MARITAL_STATUS": marital_status,
-                "FACULTY_CODE": faculty_code,
-                "STU_DEGREE_CODE": degree_code
-            }
-            student_data.append(student_record)
-
-    return student_data
-
-def save_to_csv(student_data, filename):
-    fieldnames = [
-        "STUDENT_ID", "TERM_CODE_EFF", "TERM_CODE_ADMIT", "DATE_OF_BIRTH",
-        "CITY", "STATE", "NATION_ISO3", "NATION_NAME",
-        "GENDER", "RELIGION", "MARITAL_STATUS", "FACULTY_CODE", "STU_DEGREE_CODE"
-    ]
-
-    with open(filename, mode='w', newline='', encoding='utf-8') as file:
-        writer = csv.DictWriter(file, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(student_data)
-
-# Configuration constants
-STUDENT_ID_PREFIX = 318  # Prefix for all student IDs
-TRINIDAD_BIAS = 92      # Percentage of students from Trinidad
-FEMALE_RATIO = 0.6      # Ratio of female students
-
-# Generate data for 500 students
-students = generate_student_data(500)
-
-# Save the generated data to a CSV file
-save_to_csv(students, 'university_registration_data.csv')
-
-print("Data has been generated and saved to university_registration_data.csv")
+if __name__ == "__main__":
+    main()
