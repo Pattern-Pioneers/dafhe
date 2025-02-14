@@ -1,8 +1,73 @@
+from tqdm import tqdm
 import csv
 import random
 from datetime import date
 import faker
 import pandas as pd
+from typing import Dict
+import json
+from together import Together  # Update the import
+import os
+
+fake = faker.Faker()
+
+
+def get_gender_distribution(year: int) -> Dict[str, float]:
+    """
+    Get realistic gender distribution for CS/IT programs for a given year using Together AI.
+    Returns a dictionary of gender ratios that sum to 1.0
+    """
+    api_key = os.getenv("TOGETHER_API_KEY_dafhe")
+    if not api_key:
+        print("Error: TOGETHER_API_KEY_dafhe environment variable not set")
+        return {"F": 0.6, "M": 0.4}
+
+    # Initialize Together client properly
+    client = Together(api_key=api_key)  # Updated client initialization
+
+    messages = [
+        {
+            "role": "system",
+            "content": "You are a data analysis assistant that provides gender distribution statistics for Computer Science and IT university enrollment.",
+        },
+        {
+            "role": "user",
+            "content": f"""For the year {year}, provide the gender distribution as a JSON object.
+            Return only a valid JSON object like this: {{"F": 0.25, "M": 0.75}}
+            The values must sum to 1.0
+            """,
+        },
+    ]
+
+    try:
+        response = client.chat.completions.create(
+            model="meta-llama/Llama-3.3-70B-Instruct-Turbo",  # TODO use different models, maybe an array to rotate models
+            messages=messages,
+            max_tokens=100,
+            temperature=0.5,  # TODO try different temperatures
+            top_p=0.9,
+            stream=False,
+        )
+
+        # Print raw response for debugging
+        print(f"\nLLM Response for year {year}:")
+        response_text = response.choices[0].message.content.strip()
+        print("Raw response:", response_text)
+        print("-" * 50)
+
+        try:
+            distribution = json.loads(response_text)
+            if validate_gender_distribution(distribution):
+                return distribution
+        except json.JSONDecodeError as e:
+            print(f"JSON parsing error: {e}")
+
+        return {"F": 0.6, "M": 0.4}
+
+    except Exception as e:
+        print(f"Warning: Together API call failed for year {year}")
+        print(f"Error: {str(e)}")
+        return {"F": 0.6, "M": 0.4}
 
 
 def generate_student_ids(num_students):
@@ -14,7 +79,43 @@ def generate_student_ids(num_students):
     return possible_ids[:num_students]
 
 
-fake = faker.Faker()
+def prepare_location_data():
+    """Cache location data processing"""
+    worldcities_df = pd.read_csv(r"real stats/worldcities.csv")
+    worldcities_df["population"] = pd.to_numeric(
+        worldcities_df["population"], errors="coerce"
+    ).fillna(0)
+
+    country_stats = pd.read_csv(r"real stats\\country_stats.csv")
+    country_stats = country_stats[
+        ~country_stats["iso3"].isin(["TTO", "UG_TOTAL", "N/A"])
+    ]
+
+    valid_nations = country_stats["iso3"].unique()
+    worldcities_df = worldcities_df[worldcities_df["iso3"].isin(valid_nations)]
+
+    # Pre-compute city selections per country
+    city_cache = {}
+    for nation in worldcities_df["iso3"].unique():
+        nation_cities = worldcities_df[worldcities_df["iso3"] == nation]
+        total_pop = nation_cities["population"].sum()
+
+        if total_pop > 0:
+            weights = nation_cities["population"] / total_pop
+            city_cache[nation] = (nation_cities, weights)
+        else:
+            city_cache[nation] = (nation_cities, None)
+
+    return worldcities_df, city_cache
+
+
+def precompute_gender_distributions(min_year, max_year):
+    """Pre-compute all gender distributions"""
+    distributions = {}
+    print("Pre-computing gender distributions...")
+    for year in range(min_year, max_year + 1):
+        distributions[year] = get_gender_distribution(year)
+    return distributions
 
 
 def generate_dob(admit_year):
@@ -81,90 +182,38 @@ def generate_term_codes(admit_year, admit_sem):
     return term_codes
 
 
+def validate_gender_distribution(distribution: Dict[str, float]) -> bool:
+    """
+    Validate that the gender distribution is properly formatted and sums to 1.0
+    """
+    if not isinstance(distribution, dict):
+        return False
+    if set(distribution.keys()) != {"F", "M"}:
+        return False
+    if not all(isinstance(v, (int, float)) for v in distribution.values()):
+        return False
+    if (
+        not abs(sum(distribution.values()) - 1.0) < 0.001
+    ):  # Allow small floating point errors
+        return False
+    return True
+
+
 def main():
-    random.seed(42)  # For reproducibility
-    num_students = 1000  # Adjust the number of students as needed
+    random.seed(42)
+    num_students = 10000
+
+    print("Loading and caching location data...")
+    worldcities_df, city_cache = prepare_location_data()
+
+    # Pre-compute all needed distributions
+    gender_distributions = precompute_gender_distributions(2000, 2024)
+
+    # Pre-compute student IDs
     student_ids = generate_student_ids(num_students)
 
-    # Load world cities data and compute selection lists
-    worldcities_df = pd.read_csv(r"real stats/worldcities.csv")
-    worldcities_df["population"] = pd.to_numeric(
-        worldcities_df["population"], errors="coerce"
-    ).fillna(0)
-
-    # Load country stats and filter out special entries
-    country_stats = pd.read_csv(r"real stats\\country_stats.csv")
-    country_stats = country_stats[country_stats["iso3"] != "TTO"]
-    country_stats = country_stats[country_stats["iso3"] != "UG_TOTAL"]
-    country_stats = country_stats[country_stats["iso3"] != "N/A"]  # Remove "Not Identifiable"
-
-    # Only use nations that appear in country_stats
-    valid_nations = country_stats["iso3"].unique().tolist()
-    # Filter worldcities to only include countries from our stats
-    worldcities_df = worldcities_df[worldcities_df["iso3"].isin(valid_nations)]
-    
-    # Now get the list of available nations from the filtered dataframe
-    nations = worldcities_df["iso3"].unique().tolist()
-    
-    # Prepare country weights based on 2022 statistics
-    country_stats["2022"] = pd.to_numeric(country_stats["2022"], errors="coerce").fillna(0)
-    
-    # Create weights dictionary only for valid nations
-    country_weights = {
-        row["iso3"]: row["2022"] + 1 for _, row in country_stats.iterrows() 
-        if row["iso3"] in nations
-    }
-
-    # Create a list of possible nations and their weights for random selection
-    available_nations = []
-    weights = []
-    for nation in nations:
-        if nation in country_weights:
-            available_nations.append(nation)
-            weights.append(country_weights[nation])
-
-    # Normalize weights
-    total_weight = sum(weights)
-    weights = [w / total_weight for w in weights]
-
-    # Replace the nation selection in the main loop with:
-    # Select nation based on real-world statistics from 2022
-    chosen_nation = random.choices(available_nations, weights=weights, k=1)[0]
-    nation_cities = worldcities_df[worldcities_df["iso3"] == chosen_nation]
-
-    # Define admission year range and other attributes
-    min_year_admit = 2000
-    max_year_admit = 2024
-    marital_status_options = [
-        "Single",
-        "Married",
-        "Common-Law",
-        "Separated",
-        "Divorced",
-        "Other",
-    ]
-    gender_options = (
-        ["F"] * 60 + ["M"] * 40
-    )  # TODO: Adjust gender skew to match the floating window approach used in the graduation script
-    religion_options = [
-        "Other",
-        "None",
-        "Christian",
-        "Seventh-Day Adventist",
-        "Pentecostal",
-        "Roman Catholic",
-        "Muslim",
-        "Hindu",
-        "Rastafarian",
-        "Jehovah's Witness",
-        "Presbyterian",
-        "Methodist",
-        "Anglican",
-        "Baptist",
-    ]
-    degree_codes = ["CS-MAJO", "CS-SPEC", "CS-MANA", "IT-MAJO", "IT-SPEC"]
-
-    with open("25enrollv999.csv", mode="w", newline="", encoding="utf-8") as csv_file:
+    print("Generating student records...")
+    with open("25enrollvLLM.csv", mode="w", newline="", encoding="utf-8") as csv_file:
         writer = csv.writer(csv_file)
         writer.writerow(
             [
@@ -183,49 +232,64 @@ def main():
             ]
         )
 
-        for sid in student_ids:
-            admit_year = random.randint(min_year_admit, max_year_admit)
+        for sid in tqdm(student_ids, desc="Generating records"):
+            admit_year = random.randint(2000, 2024)
             term_code_admit = f"{admit_year}10"
             admit_sem = 1
             term_codes = generate_term_codes(admit_year, admit_sem)
             dob = generate_dob(admit_year)
-            gender = random.choice(gender_options)
-            religion = random.choice(religion_options)
-            marital_status = random.choice(marital_status_options)
+            religion = random.choice(
+                [
+                    "Other",
+                    "None",
+                    "Christian",
+                    "Seventh-Day Adventist",
+                    "Pentecostal",
+                    "Roman Catholic",
+                    "Muslim",
+                    "Hindu",
+                    "Rastafarian",
+                    "Jehovah's Witness",
+                    "Presbyterian",
+                    "Methodist",
+                    "Anglican",
+                    "Baptist",
+                ]
+            )
+            marital_status = random.choice(
+                [
+                    "Single",
+                    "Married",
+                    "Common-Law",
+                    "Separated",
+                    "Divorced",
+                    "Other",
+                ]
+            )
             faculty_code = "FSA" if int(term_codes[0][:4]) <= 2012 else "FST"
-            degree_code = random.choice(degree_codes)
+            degree_code = random.choice(
+                ["CS-MAJO", "CS-SPEC", "CS-MANA", "IT-MAJO", "IT-SPEC"]
+            )
 
-            # Select nation based on real-world skew:
-            r = random.random()
-            chosen_nation = random.choice(nations)
-            nation_cities = worldcities_df[worldcities_df["iso3"] == chosen_nation]
-            if not nation_cities.empty:
-                # Use population-weighted selection
-                total_pop = nation_cities["population"].sum()
-                if total_pop > 0:  # Only use weights if we have population data
-                    weights = nation_cities["population"] / total_pop
-                    selected_city = nation_cities.sample(n=1, weights=weights).iloc[0]
-                else:
-                    selected_city = nation_cities.sample(1).iloc[0]
+            # Use cached gender distribution
+            gender = random.choices(
+                list(gender_distributions[admit_year].keys()),
+                weights=list(gender_distributions[admit_year].values()),
+                k=1,
+            )[0]
 
-                city = selected_city["city_ascii"]  # Use ASCII version of city name
-                state = selected_city["admin_name"]
-                nation_value = selected_city["country"]
+            # Use cached city data
+            chosen_nation = random.choice(list(city_cache.keys()))
+            nation_cities, weights = city_cache[chosen_nation]
+
+            if weights is not None:
+                selected_city = nation_cities.sample(n=1, weights=weights).iloc[0]
             else:
-                # Fallback to global population-weighted selection if no cities found for nation
-                total_pop = worldcities_df["population"].sum()
-                if total_pop > 0:
-                    weights = worldcities_df["population"] / total_pop
-                    selected_city = worldcities_df.sample(n=1, weights=weights).iloc[0]
-                    city = selected_city["city_ascii"]
-                    state = selected_city["admin_name"]
-                    nation_value = selected_city["country"]
-                else:
-                    # Fallback if no population data available
-                    selected_city = worldcities_df.sample(1).iloc[0]
-                    city = selected_city["city_ascii"]
-                    state = selected_city["admin_name"]
-                    nation_value = selected_city["country"]
+                selected_city = nation_cities.sample(1).iloc[0]
+
+            city = selected_city["city_ascii"]  # Use ASCII version of city name
+            state = selected_city["admin_name"]
+            nation_value = selected_city["country"]
 
             # Write a record for each semester
             for term_eff in term_codes:
@@ -246,6 +310,9 @@ def main():
                     ]
                 )
 
+
+print("Generating data...")
+print("Generated data saved to 25enrollvLLM.csv")
 
 if __name__ == "__main__":
     main()
