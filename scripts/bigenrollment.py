@@ -83,26 +83,54 @@ def generate_term_codes(admit_year, admit_sem):
 
 def main():
     random.seed(42)  # For reproducibility
-    num_students = 10000  # Adjust the number of students as needed
+    num_students = 1000  # Adjust the number of students as needed
     student_ids = generate_student_ids(num_students)
 
     # Load world cities data and compute selection lists
     worldcities_df = pd.read_csv(r"real stats/worldcities.csv")
-    # Convert population to numeric, replacing any NaN with 0
     worldcities_df["population"] = pd.to_numeric(
         worldcities_df["population"], errors="coerce"
     ).fillna(0)
 
-    # No longer need these lists since we'll use weighted selection
-    # cities = worldcities_df["city"].unique().tolist()
-    # states = worldcities_df["admin_name"].unique().tolist()
-    nations = worldcities_df["iso3"].unique().tolist()
-    countries = worldcities_df["country"].unique().tolist()
-
-    # Load country stats for skewing nationality
+    # Load country stats and filter out special entries
     country_stats = pd.read_csv(r"real stats\\country_stats.csv")
     country_stats = country_stats[country_stats["iso3"] != "TTO"]
     country_stats = country_stats[country_stats["iso3"] != "UG_TOTAL"]
+    country_stats = country_stats[country_stats["iso3"] != "N/A"]  # Remove "Not Identifiable"
+
+    # Only use nations that appear in country_stats
+    valid_nations = country_stats["iso3"].unique().tolist()
+    # Filter worldcities to only include countries from our stats
+    worldcities_df = worldcities_df[worldcities_df["iso3"].isin(valid_nations)]
+    
+    # Now get the list of available nations from the filtered dataframe
+    nations = worldcities_df["iso3"].unique().tolist()
+    
+    # Prepare country weights based on 2022 statistics
+    country_stats["2022"] = pd.to_numeric(country_stats["2022"], errors="coerce").fillna(0)
+    
+    # Create weights dictionary only for valid nations
+    country_weights = {
+        row["iso3"]: row["2022"] + 1 for _, row in country_stats.iterrows() 
+        if row["iso3"] in nations
+    }
+
+    # Create a list of possible nations and their weights for random selection
+    available_nations = []
+    weights = []
+    for nation in nations:
+        if nation in country_weights:
+            available_nations.append(nation)
+            weights.append(country_weights[nation])
+
+    # Normalize weights
+    total_weight = sum(weights)
+    weights = [w / total_weight for w in weights]
+
+    # Replace the nation selection in the main loop with:
+    # Select nation based on real-world statistics from 2022
+    chosen_nation = random.choices(available_nations, weights=weights, k=1)[0]
+    nation_cities = worldcities_df[worldcities_df["iso3"] == chosen_nation]
 
     # Define admission year range and other attributes
     min_year_admit = 2000
