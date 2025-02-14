@@ -1,4 +1,4 @@
-country_iso3,country_name,2018,2019,2020,2021,2022,contributing_country
+iso3,country_name,2018,2019,2020,2021,2022,contributing_country
 AIA,Anguilla,3,2,2,2,2,Y
 ATG,Antigua & Barbuda,27,31,26,21,15,Y
 BRB,Barbados,95,105,103,117,111,Y
@@ -15,7 +15,6 @@ VCT,St Vincent & The Grenadines,95,76,76,61,45,Y
 BHS,The Bahamas,73,75,68,44,23,Y
 TTO,Trinidad & Tobago,10494,10552,10586,10261,9402,Y
 TCA,Turks & Caicos Islands,3,3,2,0,0,Y
-N/A,Not Identifiable,1,4,13,13,86,N
 BWA,Botswana,1,2,1,1,1,N
 BRA,Brazil,2,4,0,0,0,N
 CAN,Canada,13,11,10,3,3,N
