@@ -6,68 +6,108 @@ import faker
 import pandas as pd
 from typing import Dict
 import json
-from together import Together  # Update the import
+from together import Together
 import os
 
 fake = faker.Faker()
 
+# In case LLM response looks shaky formatwise
+def clean_llm_response(response_text: str) -> str:
+    """Clean LLM response by removing markdown code blocks and other formatting"""
+    # Remove markdown code blocks
+    response_text = response_text.strip("`")
+    while response_text.startswith("`"):
+        response_text = response_text[1:]
+    while response_text.endswith("`"):
+        response_text = response_text[:-1]
+    return response_text.strip()
 
-def get_gender_distribution(year: int) -> Dict[str, float]:
+
+def query_llm(year: int) -> Dict[str, Dict[str, float]]:
     """
-    Get realistic gender distribution for CS/IT programs for a given year using Together AI.
-    Returns a dictionary of gender ratios that sum to 1.0
+    Get realistic distributions for gender and religion in CS/IT programs for a given year using Together AI.
+    Returns a dictionary containing both gender and religion distribution dictionaries.
     """
     api_key = os.getenv("TOGETHER_API_KEY_dafhe")
     if not api_key:
         print("Error: TOGETHER_API_KEY_dafhe environment variable not set")
-        return {"F": 0.6, "M": 0.4}
+        return {
+            "gender": {"F": 0.6, "M": 0.4},
+            "religion": {
+                "Christian": 0.35,
+                "Hindu": 0.25,
+                "Muslim": 0.15,
+                "None": 0.10,
+                "Other": 0.15,
+            },
+        }
 
-    # Initialize Together client properly
-    client = Together(api_key=api_key)  # Updated client initialization
+    client = Together(api_key=api_key)
 
     messages = [
         {
             "role": "system",
-            "content": "You are a data analysis assistant that provides gender distribution statistics for Computer Science and IT university enrollment.",
+            "content": "You are a data analysis assistant that provides demographic statistics for university enrollment in Trinidad and Tobago. Return only raw JSON without any markdown formatting or code blocks.",
         },
         {
             "role": "user",
-            "content": f"""For the year {year}, provide the gender distribution as a JSON object.
-            Return only a valid JSON object like this: {{"F": 0.25, "M": 0.75}}
-            The values must sum to 1.0
+            "content": f"""For the year {year}, provide both gender and religion distributions for university CS/IT programs in Trinidad and Tobago as a JSON object.
+            Include only major religions and None/Other categories.
+            Return only a raw JSON object like this, without any markdown formatting:
+            {{
+                "gender": {{"F": 0.25, "M": 0.75}},
+                "religion": {{
+                    "Christian": 0.35,
+                    "Hindu": 0.25,
+                    "Muslim": 0.15,
+                    "None": 0.10,
+                    "Other": 0.15
+                }}
+            }}
+            Values within each category must sum to 1.0
             """,
         },
     ]
 
     try:
         response = client.chat.completions.create(
-            model="meta-llama/Llama-3.3-70B-Instruct-Turbo",  # TODO use different models, maybe an array to rotate models
+            model="meta-llama/Llama-3.3-70B-Instruct-Turbo",
             messages=messages,
-            max_tokens=100,
-            temperature=0.5,  # TODO try different temperatures
+            max_tokens=200,
+            temperature=0.6,  # TODO adjust temperatures
             top_p=0.9,
             stream=False,
         )
 
-        # Print raw response for debugging
         print(f"\nLLM Response for year {year}:")
         response_text = response.choices[0].message.content.strip()
         print("Raw response:", response_text)
         print("-" * 50)
 
         try:
-            distribution = json.loads(response_text)
-            if validate_gender_distribution(distribution):
-                return distribution
+            # Clean response before parsing
+            cleaned_response = clean_llm_response(response_text)
+            distributions = json.loads(cleaned_response)
+            if validate_distributions(distributions):
+                return distributions
         except json.JSONDecodeError as e:
             print(f"JSON parsing error: {e}")
-
-        return {"F": 0.6, "M": 0.4}
 
     except Exception as e:
         print(f"Warning: Together API call failed for year {year}")
         print(f"Error: {str(e)}")
-        return {"F": 0.6, "M": 0.4}
+
+    # Return default distributions if anything fails
+    return {
+        "gender": {"F": 0.6, "M": 0.4},
+        "religion": {
+            "Christian": 0.35,
+            "Hindu": 0.25,
+            "Muslim": 0.15,
+            "None": 0.10,
+            "Other": 0.15,
+        },
+    }
 
 
 def generate_student_ids(num_students):
@@ -109,12 +149,12 @@ def prepare_location_data():
     return worldcities_df, city_cache
 
 
-def precompute_gender_distributions(min_year, max_year):
-    """Pre-compute all gender distributions"""
+def precompute_distributions(min_year, max_year):
+    """Pre-compute all distributions"""
     distributions = {}
-    print("Pre-computing gender distributions...")
+    print("Pre-computing demographic distributions...")
     for year in range(min_year, max_year + 1):
-        distributions[year] = get_gender_distribution(year)
+        distributions[year] = query_llm(year)
     return distributions
 
 
@@ -182,20 +222,29 @@ def generate_term_codes(admit_year, admit_sem):
     return term_codes
 
 
-def validate_gender_distribution(distribution: Dict[str, float]) -> bool:
+def validate_distributions(distributions: Dict[str, Dict[str, float]]) -> bool:
     """
-    Validate that the gender distribution is properly formatted and sums to 1.0
+    Validate that both gender and religion distributions are properly formatted and sum to 1.0
     """
-    if not isinstance(distribution, dict):
+    if not isinstance(distributions, dict):
         return False
-    if set(distribution.keys()) != {"F", "M"}:
+
+    # Validate gender distribution
+    gender_dist = distributions.get("gender", {})
+    if set(gender_dist.keys()) != {"F", "M"}:
         return False
-    if not all(isinstance(v, (int, float)) for v in distribution.values()):
+    if not all(isinstance(v, (int, float)) for v in gender_dist.values()):
         return False
-    if (
-        not abs(sum(distribution.values()) - 1.0) < 0.001
-    ):  # Allow small floating point errors
+    if not abs(sum(gender_dist.values()) - 1.0) < 0.001:
         return False
+
+    # Validate religion distribution
+    religion_dist = distributions.get("religion", {})
+    if not all(isinstance(v, (int, float)) for v in religion_dist.values()):
+        return False
+    if not abs(sum(religion_dist.values()) - 1.0) < 0.001:
+        return False
+
     return True
 
 
@@ -207,7 +256,7 @@ def main():
     worldcities_df, city_cache = prepare_location_data()
 
     # Pre-compute all needed distributions
-    gender_distributions = precompute_gender_distributions(2000, 2024)
+    distributions = precompute_distributions(2000, 2024)
 
     # Pre-compute student IDs
     student_ids = generate_student_ids(num_students)
@@ -238,24 +287,6 @@ def main():
             admit_sem = 1
             term_codes = generate_term_codes(admit_year, admit_sem)
             dob = generate_dob(admit_year)
-            religion = random.choice(
-                [
-                    "Other",
-                    "None",
-                    "Christian",
-                    "Seventh-Day Adventist",
-                    "Pentecostal",
-                    "Roman Catholic",
-                    "Muslim",
-                    "Hindu",
-                    "Rastafarian",
-                    "Jehovah's Witness",
-                    "Presbyterian",
-                    "Methodist",
-                    "Anglican",
-                    "Baptist",
-                ]
-            )
             marital_status = random.choice(
                 [
                     "Single",
@@ -271,10 +302,17 @@ def main():
                 ["CS-MAJO", "CS-SPEC", "CS-MANA", "IT-MAJO", "IT-SPEC"]
             )
 
-            # Use cached gender distribution
+            # Use cached distributions
+            year_dist = distributions[admit_year]
             gender = random.choices(
-                list(gender_distributions[admit_year].keys()),
-                weights=list(gender_distributions[admit_year].values()),
+                list(year_dist["gender"].keys()),
+                weights=list(year_dist["gender"].values()),
+                k=1,
+            )[0]
+
+            religion = random.choices(
+                list(year_dist["religion"].keys()),
+                weights=list(year_dist["religion"].values()),
                 k=1,
             )[0]
 
