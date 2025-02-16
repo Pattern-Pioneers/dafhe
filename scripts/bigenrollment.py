@@ -1,4 +1,4 @@
-from tqdm import tqdm
+from tqdm import tqdm  # progress bar
 import csv
 import random
 from datetime import date
@@ -6,14 +6,14 @@ import faker
 import pandas as pd
 from typing import Dict
 import json
-from together import Together
+from together import Together  # LLM provider
 import os
 
 fake = faker.Faker()
 
+
 # In case LLM response looks shaky formatwise
 def clean_llm_response(response_text: str) -> str:
-    """Clean LLM response by removing markdown code blocks and other formatting"""
     # Remove markdown code blocks
     response_text = response_text.strip("`")
     while response_text.startswith("`"):
@@ -23,26 +23,15 @@ def clean_llm_response(response_text: str) -> str:
     return response_text.strip()
 
 
+# Query LLM for demographic distributions
 def query_llm(year: int) -> Dict[str, Dict[str, float]]:
-    """
-    Get realistic distributions for gender and religion in CS/IT programs for a given year using Together AI.
-    Returns a dictionary containing both gender and religion distribution dictionaries.
-    """
     api_key = os.getenv("TOGETHER_API_KEY_dafhe")
     if not api_key:
-        print("Error: TOGETHER_API_KEY_dafhe environment variable not set")
-        return {
-            "gender": {"F": 0.6, "M": 0.4},
-            "religion": {
-                "Christian": 0.35,
-                "Hindu": 0.25,
-                "Muslim": 0.15,
-                "None": 0.10,
-                "Other": 0.15,
-            },
-        }
+        raise ValueError("TOGETHER_API_KEY_dafhe environment variable not set")
 
     client = Together(api_key=api_key)
+    model = "meta-llama/Llama-3.3-70B-Instruct-Turbo"  # Choose a model
+    print(f"\nUsing LLM model: {model}\n")
 
     messages = [
         {
@@ -71,10 +60,10 @@ def query_llm(year: int) -> Dict[str, Dict[str, float]]:
 
     try:
         response = client.chat.completions.create(
-            model="meta-llama/Llama-3.3-70B-Instruct-Turbo",
+            model=model,  # Use model variable
             messages=messages,
             max_tokens=200,
-            temperature=0.6,  # TODO adjust temperatures
+            temperature=0.6,  # TODO experiment with temperatures for variety/realism
             top_p=0.9,
             stream=False,
         )
@@ -84,30 +73,19 @@ def query_llm(year: int) -> Dict[str, Dict[str, float]]:
         print("Raw response:", response_text)
         print("-" * 50)
 
-        try:
-            # Clean response before parsing
+        try:  # Clean response before parsing
             cleaned_response = clean_llm_response(response_text)
             distributions = json.loads(cleaned_response)
             if validate_distributions(distributions):
                 return distributions
         except json.JSONDecodeError as e:
             print(f"JSON parsing error: {e}")
+            raise ValueError(f"Failed to parse LLM response: {e}")
 
     except Exception as e:
-        print(f"Warning: Together API call failed for year {year}")
+        print(f"Error querying LLM API for year {year}")
         print(f"Error: {str(e)}")
-
-    # Return default distributions if anything fails
-    return {
-        "gender": {"F": 0.6, "M": 0.4},
-        "religion": {
-            "Christian": 0.35,
-            "Hindu": 0.25,
-            "Muslim": 0.15,
-            "None": 0.10,
-            "Other": 0.15,
-        },
-    }
+        raise RuntimeError(f"LLM query failed: {e}")
 
 
 def generate_student_ids(num_students):
@@ -119,6 +97,13 @@ def generate_student_ids(num_students):
     return possible_ids[:num_students]
 
 
+def load_country_probabilities():
+    """Load country probabilities from the CSV file"""
+    df = pd.read_csv(r"real stats/country_stats_with_probabilities.csv")
+    probabilities = dict(zip(df["iso3"], df["probability"]))
+    return probabilities
+
+
 def prepare_location_data():
     """Cache location data processing"""
     worldcities_df = pd.read_csv(r"real stats/worldcities.csv")
@@ -126,16 +111,18 @@ def prepare_location_data():
         worldcities_df["population"], errors="coerce"
     ).fillna(0)
 
-    country_stats = pd.read_csv(r"real stats\\country_stats.csv")
-    country_stats = country_stats[
-        ~country_stats["iso3"].isin(["TTO", "UG_TOTAL", "N/A"])
-    ]
+    # Load country probabilities
+    country_probs = load_country_probabilities()
 
-    valid_nations = country_stats["iso3"].unique()
+    # Filter worldcities to only include countries in our probability list
+    valid_nations = list(country_probs.keys())
     worldcities_df = worldcities_df[worldcities_df["iso3"].isin(valid_nations)]
 
     # Pre-compute city selections per country
     city_cache = {}
+    nation_probs = []
+    valid_nations = []
+
     for nation in worldcities_df["iso3"].unique():
         nation_cities = worldcities_df[worldcities_df["iso3"] == nation]
         total_pop = nation_cities["population"].sum()
@@ -146,7 +133,10 @@ def prepare_location_data():
         else:
             city_cache[nation] = (nation_cities, None)
 
-    return worldcities_df, city_cache
+        valid_nations.append(nation)
+        nation_probs.append(country_probs.get(nation, 0.0))
+
+    return worldcities_df, city_cache, valid_nations, nation_probs
 
 
 def precompute_distributions(min_year, max_year):
@@ -250,19 +240,23 @@ def validate_distributions(distributions: Dict[str, Dict[str, float]]) -> bool:
 
 def main():
     random.seed(42)
-    num_students = 10000
+
+    # Prompt user for parameters
+    num_students = int(input("Enter the number of students to generate: "))
+    min_year = int(input("Enter the minimum year (e.g. 2000): "))
+    max_year = int(input("Enter the maximum year (e.g. 2024): "))
 
     print("Loading and caching location data...")
-    worldcities_df, city_cache = prepare_location_data()
+    worldcities_df, city_cache, valid_nations, nation_probs = prepare_location_data()
 
     # Pre-compute all needed distributions
-    distributions = precompute_distributions(2000, 2024)
+    distributions = precompute_distributions(min_year, max_year)
 
     # Pre-compute student IDs
     student_ids = generate_student_ids(num_students)
 
     print("Generating student records...")
-    with open("25enrollvLLM.csv", mode="w", newline="", encoding="utf-8") as csv_file:
+    with open("25enrollvLLM2.csv", mode="w", newline="", encoding="utf-8") as csv_file:
         writer = csv.writer(csv_file)
         writer.writerow(
             [
@@ -282,7 +276,7 @@ def main():
         )
 
         for sid in tqdm(student_ids, desc="Generating records"):
-            admit_year = random.randint(2000, 2024)
+            admit_year = random.randint(min_year, max_year)
             term_code_admit = f"{admit_year}10"
             admit_sem = 1
             term_codes = generate_term_codes(admit_year, admit_sem)
@@ -316,8 +310,8 @@ def main():
                 k=1,
             )[0]
 
-            # Use cached city data
-            chosen_nation = random.choice(list(city_cache.keys()))
+            # Use probability-weighted nation selection
+            chosen_nation = random.choices(valid_nations, weights=nation_probs, k=1)[0]
             nation_cities, weights = city_cache[chosen_nation]
 
             if weights is not None:
@@ -350,7 +344,7 @@ def main():
 
 
 print("Generating data...")
-print("Generated data saved to 25enrollvLLM.csv")
+print("Saving to 25enrollvLLM2.csv")
 
 if __name__ == "__main__":
     main()

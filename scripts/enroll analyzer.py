@@ -1,13 +1,19 @@
 import pandas as pd
-import datetime
+# import datetime
+from tqdm import tqdm
+
+# Enable tqdm for pandas operations
+tqdm.pandas()
 
 # Read the CSV file
+print("Reading CSV file...")
 df = pd.read_csv('25years enrollment sample.csv')
 
 # Clean column names
 df.columns = df.columns.str.strip()
 
 # Convert date columns to datetime
+print("Converting dates...")
 df['DATE_OF_BIRTH'] = pd.to_datetime(df['DATE_OF_BIRTH'])
 
 # Extract year and semester from TERM_CODE_ADMIT
@@ -15,12 +21,14 @@ df['ADMIT_YEAR'] = df['TERM_CODE_ADMIT'].astype(str).str[:4].astype(int)
 df['ADMIT_SEMESTER'] = df['TERM_CODE_ADMIT'].astype(str).str[4:].astype(int)
 
 # Calculate enrollment date (approximate to middle of semester)
-semester_month = {10: 1, 20: 5, 30: 9}  # Map semester codes to months
-df['ENROLL_DATE'] = df.apply(lambda x: pd.Timestamp(year=x['ADMIT_YEAR'], 
+print("Calculating enrollment dates...")
+semester_month = {10: 9, 20: 1, 30: 5}  # Updated: Sem 1 (10) = Sept, Sem 2 (20) = Jan, Sem 3 (30) = May
+df['ENROLL_DATE'] = df.progress_apply(lambda x: pd.Timestamp(year=x['ADMIT_YEAR'], 
                                                    month=semester_month[x['ADMIT_SEMESTER']], 
                                                    day=1), axis=1)
 
 # Calculate age at enrollment
+print("Calculating ages...")
 df['AGE_AT_ENROLLMENT'] = (df['ENROLL_DATE'] - df['DATE_OF_BIRTH']).dt.total_seconds() / (365.25 * 24 * 60 * 60)
 
 # Group by degree code and calculate statistics
@@ -50,5 +58,5 @@ result['Percentage'] = (result['Total_Students'] / total_students * 100).round(1
 # Display results
 print("\nEnrollment Distribution by Degree Code:")
 print("==============================================================")
-print(result.to_string(index=False))
+print(result.to_string(index=True))
 print(f"\nTotal Unique Students: {total_students}")
