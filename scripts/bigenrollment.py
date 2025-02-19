@@ -31,7 +31,7 @@ def query_llm(year: int) -> Dict[str, Dict[str, float]]:
 
     client = Together(api_key=api_key)
     model = "meta-llama/Llama-3.3-70B-Instruct-Turbo"  # Choose a model
-    print(f"\nUsing LLM model: {model}\n")
+    print(f"\nUsing LLM model: {model}")
 
     messages = [
         {
@@ -40,8 +40,9 @@ def query_llm(year: int) -> Dict[str, Dict[str, float]]:
         },
         {
             "role": "user",
-            "content": f"""For the year {year}, provide both gender and religion distributions for university CS/IT programs in Trinidad and Tobago as a JSON object.
+            "content": f"""For the year {year}, provide gender, religion, and marital status distributions for university CS/IT programs in Trinidad and Tobago as a JSON object.
             Include only major religions and None/Other categories.
+            For marital status, include: Single, Married, Common-Law, Separated, Divorced, Other.
             Return only a raw JSON object like this, without any markdown formatting:
             {{
                 "gender": {{"F": 0.25, "M": 0.75}},
@@ -51,6 +52,14 @@ def query_llm(year: int) -> Dict[str, Dict[str, float]]:
                     "Muslim": 0.15,
                     "None": 0.10,
                     "Other": 0.15
+                }},
+                "marital_status": {{
+                    "Single": 0.82,
+                    "Married": 0.10,
+                    "Common-Law": 0.03,
+                    "Separated": 0.02,
+                    "Divorced": 0.02,
+                    "Other": 0.01
                 }}
             }}
             Values within each category must sum to 1.0
@@ -63,7 +72,7 @@ def query_llm(year: int) -> Dict[str, Dict[str, float]]:
             model=model,  # Use model variable
             messages=messages,
             max_tokens=200,
-            temperature=0.6,  # TODO experiment with temperatures for variety/realism
+            temperature=0.8,  # TODO experiment with temperatures for variety/realism
             top_p=0.9,
             stream=False,
         )
@@ -235,7 +244,74 @@ def validate_distributions(distributions: Dict[str, Dict[str, float]]) -> bool:
     if not abs(sum(religion_dist.values()) - 1.0) < 0.001:
         return False
 
+    # Validate marital status distribution
+    marital_dist = distributions.get("marital_status", {})
+    expected_marital_statuses = {
+        "Single",
+        "Married",
+        "Common-Law",
+        "Separated",
+        "Divorced",
+        "Other",
+    }
+    if set(marital_dist.keys()) != expected_marital_statuses:
+        return False
+    if not all(isinstance(v, (int, float)) for v in marital_dist.values()):
+        return False
+    if not abs(sum(marital_dist.values()) - 1.0) < 0.001:
+        return False
+
     return True
+
+
+def load_degree_probabilities():
+    """Load historical degree enrollment data and convert to probabilities with random variation"""
+    df = pd.read_csv(r"real stats/degree_enrollment.csv")
+    
+    # Convert raw counts to base probabilities for each year
+    prob_data = {}
+    for _, row in df.iterrows():
+        year = row["year"]
+        total = row["total"]
+        
+        # Calculate base probabilities
+        base_probs = {
+            "CS-MAJO": row["CS-MAJO"] / total,
+            "CS-SPEC": row["CS-SPEC"] / total,
+            "CS-MANA": row["CS-MANA"] / total,
+            "IT-MAJO": row["IT-MAJO"] / total,
+            "IT-SPEC": row["IT-SPEC"] / total,
+        }
+        
+        # Add random variation within ±15% of original probability
+        varied_probs = {}
+        for degree, prob in base_probs.items():
+            variation = prob * random.uniform(-0.15, 0.15)
+            varied_probs[degree] = max(0.01, prob + variation)  # Ensure minimum 1%
+            
+        # Normalize to ensure probabilities sum to 1
+        total_prob = sum(varied_probs.values())
+        varied_probs = {k: v/total_prob for k, v in varied_probs.items()}
+        
+        prob_data[year] = varied_probs
+        
+    return prob_data
+
+
+def get_degree_probabilities(year: int, degree_probs: dict) -> tuple:
+    """Get degree probabilities for a specific year, using nearest available year if exact match not found"""
+    available_years = sorted(degree_probs.keys())
+
+    if year in degree_probs:
+        probs = degree_probs[year]
+    else:
+        # Find nearest year
+        nearest_year = min(available_years, key=lambda x: abs(x - year))
+        probs = degree_probs[nearest_year]
+
+    degrees = list(probs.keys())
+    probabilities = list(probs.values())
+    return degrees, probabilities
 
 
 def main():
@@ -243,11 +319,16 @@ def main():
 
     # Prompt user for parameters
     num_students = int(input("Enter the number of students to generate: "))
-    min_year = int(input("Enter the minimum year (e.g. 2000): "))
-    max_year = int(input("Enter the maximum year (e.g. 2024): "))
+    min_year = int(input("Enter the minimum year: "))
+    max_year = int(input("Enter the maximum year: "))
+    output_file = input("Enter output CSV filename: ")
 
     print("Loading and caching location data...")
     worldcities_df, city_cache, valid_nations, nation_probs = prepare_location_data()
+
+    # Load degree probabilities
+    print("Loading degree enrollment data...")
+    degree_probs = load_degree_probabilities()
 
     # Pre-compute all needed distributions
     distributions = precompute_distributions(min_year, max_year)
@@ -256,7 +337,7 @@ def main():
     student_ids = generate_student_ids(num_students)
 
     print("Generating student records...")
-    with open("25enrollvLLM2.csv", mode="w", newline="", encoding="utf-8") as csv_file:
+    with open(output_file, mode="w", newline="", encoding="utf-8") as csv_file:
         writer = csv.writer(csv_file)
         writer.writerow(
             [
@@ -281,23 +362,21 @@ def main():
             admit_sem = 1
             term_codes = generate_term_codes(admit_year, admit_sem)
             dob = generate_dob(admit_year)
-            marital_status = random.choice(
-                [
-                    "Single",
-                    "Married",
-                    "Common-Law",
-                    "Separated",
-                    "Divorced",
-                    "Other",
-                ]
-            )
-            faculty_code = "FSA" if int(term_codes[0][:4]) <= 2012 else "FST"
-            degree_code = random.choice(
-                ["CS-MAJO", "CS-SPEC", "CS-MANA", "IT-MAJO", "IT-SPEC"]
-            )
 
             # Use cached distributions
             year_dist = distributions[admit_year]
+            marital_status = random.choices(
+                list(year_dist["marital_status"].keys()),
+                weights=list(year_dist["marital_status"].values()),
+                k=1,
+            )[0]
+
+            faculty_code = "FSA" if int(term_codes[0][:4]) <= 2012 else "FST"
+
+            # Use historical probabilities for degree selection
+            degrees, probabilities = get_degree_probabilities(admit_year, degree_probs)
+            degree_code = random.choices(degrees, weights=probabilities, k=1)[0]
+
             gender = random.choices(
                 list(year_dist["gender"].keys()),
                 weights=list(year_dist["gender"].values()),
@@ -319,7 +398,7 @@ def main():
             else:
                 selected_city = nation_cities.sample(1).iloc[0]
 
-            city = selected_city["city_ascii"]  # Use ASCII version of city name
+            city = selected_city["city_ascii"]
             state = selected_city["admin_name"]
             nation_value = selected_city["country"]
 
@@ -344,7 +423,6 @@ def main():
 
 
 print("Generating data...")
-print("Saving to 25enrollvLLM2.csv")
 
 if __name__ == "__main__":
     main()
