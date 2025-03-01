@@ -1,0 +1,48 @@
+iso3,country_name,2018,2019,2020,2021,2022,contributing_country
+AIA,Anguilla,3,2,2,2,2,Y
+ATG,Antigua & Barbuda,27,31,26,21,15,Y
+BRB,Barbados,95,105,103,117,111,Y
+BLZ,Belize,15,19,19,20,18,Y
+VGB,British Virgin Islands,6,4,5,4,3,Y
+DMA,Dominica,22,25,25,21,12,Y
+GRD,Grenada,51,35,28,23,12,Y
+GUY,Guyana,65,65,52,49,41,Y
+JAM,Jamaica,77,67,60,48,50,Y
+MSR,Montserrat,2,3,2,2,2,Y
+KNA,St Kitts & Nevis,28,26,16,11,9,Y
+LCA,St Lucia,95,89,82,63,42,Y
+VCT,St Vincent & The Grenadines,95,76,76,61,45,Y
+BHS,The Bahamas,73,75,68,44,23,Y
+TTO,Trinidad & Tobago,10494,10552,10586,10261,9402,Y
+TCA,Turks & Caicos Islands,3,3,2,0,0,Y
+BWA,Botswana,1,2,1,1,1,N
+BRA,Brazil,2,4,0,0,0,N
+CAN,Canada,13,11,10,3,3,N
+CHN,China,2,3,2,2,0,N
+COL,Colombia,3,4,1,2,1,N
+CUB,Cuba,2,2,2,2,2,N
+DOM,Dominican Republic,2,0,0,0,0,N
+GHA,Ghana,2,2,3,2,1,N
+GTM,Guatemala,1,0,0,0,0,N
+HND,Honduras,0,0,0,0,1,N
+IND,India,16,15,17,19,16,N
+KEN,Kenya,1,2,3,3,4,N
+MWI,Malawi,2,2,2,0,0,N
+NGA,Nigeria,12,16,19,18,18,N
+YEM,North Yemen (Inactive),1,1,0,0,0,N
+PAK,Pakistan,2,1,1,0,0,N
+PHL,Philippines,2,3,3,4,5,N
+RUS,Russia,1,1,1,0,0,N
+SAU,Saudi Arabia,1,6,0,0,0,N
+SLE,Sierra Leone,1,1,0,0,0,N
+ZAF,South Africa,0,0,0,1,0,N
+LKA,Sri Lanka,2,1,1,0,0,N
+SUR,Suriname,1,1,0,0,1,N
+TZA,Tanzania,0,0,0,0,1,N
+UGA,Uganda,4,2,3,3,3,N
+UKR,Ukraine,1,1,1,0,0,N
+GBR,United Kingdom,8,6,6,7,5,N
+USA,United States of America,21,19,24,14,7,N
+VEN,Venezuela,13,10,6,5,5,N
+ZMB,Zambia,0,1,1,1,0,N
+ZWE,Zimbabwe,1,1,1,0,0,N
