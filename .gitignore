@@ -1,3 +1,13 @@
 dafhe.Rproj
 .Rproj.user
 notebooks/generators_files
+plots/age_vs_marital_status_files/*
+plots/completion_time_histogram_files/*
+plots/education_vs_marital_status_files/*
+plots/enrollment_age_boxplot_files/*
+plots/religion_by_degree_files/*
+scripts/__pycache__/*
+scripts/tests/__pycache__/*
+.env
+*.png
+*.html

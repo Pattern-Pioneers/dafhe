@@ -8,20 +8,40 @@ from typing import Dict
 import json
 from together import Together  # LLM provider
 import os
+from pydantic import BaseModel, Field
 
 fake = faker.Faker()
 
+# Define schema classes for JSON response
+class GenderDistribution(BaseModel):
+    F: float = Field(description="Proportion of female students (0-1)")
+    M: float = Field(description="Proportion of male students (0-1)")
 
-# In case LLM response looks shaky formatwise
-def clean_llm_response(response_text: str) -> str:
-    # Remove markdown code blocks
-    response_text = response_text.strip("`")
-    while response_text.startswith("`"):
-        response_text = response_text[1:]
-    while response_text.endswith("`"):
-        response_text = response_text[:-1]
-    return response_text.strip()
+class ReligionDistribution(BaseModel):
+    Christian: float = Field(description="Proportion of Christian students (0-1)")
+    Hindu: float = Field(description="Proportion of Hindu students (0-1)")
+    Muslim: float = Field(description="Proportion of Muslim students (0-1)")
+    None_: float = Field(alias="None", description="Proportion of students with no religion (0-1)")
+    Other: float = Field(description="Proportion of students with other religions (0-1)")
 
+class MaritalStatusDistribution(BaseModel):
+    Single: float = Field(description="Proportion of single students (0-1)")
+    Married: float = Field(description="Proportion of married students (0-1)")
+    Common_Law: float = Field(alias="Common-Law", description="Proportion of students in common-law relationships (0-1)")
+    Separated: float = Field(description="Proportion of separated students (0-1)")
+    Divorced: float = Field(description="Proportion of divorced students (0-1)")
+    Other: float = Field(description="Proportion of students with other marital status (0-1)")
+
+class AgeGroupMaritalStatus(BaseModel):
+    age_16_19: MaritalStatusDistribution = Field(description="Marital status for students aged 16-19")
+    age_20_24: MaritalStatusDistribution = Field(description="Marital status for students aged 20-24") 
+    age_25_34: MaritalStatusDistribution = Field(description="Marital status for students aged 25-34")
+    age_35_plus: MaritalStatusDistribution = Field(description="Marital status for students aged 35+")
+
+class DemographicDistribution(BaseModel):
+    gender: GenderDistribution
+    religion: ReligionDistribution
+    marital_status: AgeGroupMaritalStatus = Field(alias="marital_status")
 
 # Query LLM for demographic distributions
 def query_llm(year: int) -> Dict[str, Dict[str, float]]:
@@ -30,50 +50,41 @@ def query_llm(year: int) -> Dict[str, Dict[str, float]]:
         raise ValueError("TOGETHER_API_KEY_dafhe environment variable not set")
 
     client = Together(api_key=api_key)
-    model = "meta-llama/Llama-3.3-70B-Instruct-Turbo"  # Choose a model
+    model = "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo" # LLM Model
     print(f"\nUsing LLM model: {model}")
 
     messages = [
         {
             "role": "system",
-            "content": "You are a data analysis assistant that provides demographic statistics for university enrollment in Trinidad and Tobago. Return only raw JSON without any markdown formatting or code blocks.",
+            "content": "You are a data analysis assistant that provides demographic statistics for university enrollment in Trinidad and Tobago. Ensure all values in each category sum EXACTLY to 1.0. Your data should reflect realistic patterns based on age groups."
         },
         {
             "role": "user",
-            "content": f"""For the year {year}, provide gender, religion, and marital status distributions for university CS/IT programs in Trinidad and Tobago as a JSON object.
+            "content": f"""For the year {year}, provide gender, religion, and marital status distributions for university CS/IT programs in Trinidad and Tobago.
+            
             Include only major religions and None/Other categories.
-            For marital status, include: Single, Married, Common-Law, Separated, Divorced, Other.
-            Return only a raw JSON object like this, without any markdown formatting:
-            {{
-                "gender": {{"F": 0.25, "M": 0.75}},
-                "religion": {{
-                    "Christian": 0.35,
-                    "Hindu": 0.25,
-                    "Muslim": 0.15,
-                    "None": 0.10,
-                    "Other": 0.15
-                }},
-                "marital_status": {{
-                    "Single": 0.82,
-                    "Married": 0.10,
-                    "Common-Law": 0.03,
-                    "Separated": 0.02,
-                    "Divorced": 0.02,
-                    "Other": 0.01
-                }}
-            }}
-            Values within each category must sum to 1.0
-            """,
-        },
+            
+            For marital status, provide separate distributions for each age group:
+            - Age 16-19 (primarily single with rare exceptions)
+            - Age 20-24 (mostly single, some married/common-law)
+            - Age 25-34 (more diverse marital statuses)
+            - Age 35+ (typically more married/divorced/separated)
+            
+            For each category, include: Single, Married, Common-Law, Separated, Divorced, Other.
+            
+            VERY IMPORTANT: All values within each category must sum to EXACTLY 1.0."""
+        }
     ]
 
     try:
+        schema = DemographicDistribution.model_json_schema()
         response = client.chat.completions.create(
-            model=model,  # Use model variable
+            model=model,
             messages=messages,
-            max_tokens=200,
-            temperature=0.8,  # TODO experiment with temperatures for variety/realism
+            max_tokens=800,
+            temperature=0.7,
             top_p=0.9,
+            response_format={"type": "json_object", "schema": schema},
             stream=False,
         )
 
@@ -82,11 +93,27 @@ def query_llm(year: int) -> Dict[str, Dict[str, float]]:
         print("Raw response:", response_text)
         print("-" * 50)
 
-        try:  # Clean response before parsing
-            cleaned_response = clean_llm_response(response_text)
-            distributions = json.loads(cleaned_response)
-            if validate_distributions(distributions):
+        try:
+            distributions = json.loads(response_text)
+            
+            # Normalize each distribution to ensure they sum to 1.0
+            for category in ['gender', 'religion']:
+                if category in distributions:
+                    total = sum(distributions[category].values())
+                    if total > 0:  # Avoid division by zero
+                        distributions[category] = {k: v/total for k, v in distributions[category].items()}
+                        
+            # Normalize marital status distributions for each age group
+            for age_group in ['age_16_19', 'age_20_24', 'age_25_34', 'age_35_plus']:
+                if 'marital_status' in distributions and age_group in distributions['marital_status']:
+                    total = sum(distributions['marital_status'][age_group].values())
+                    if total > 0:
+                        distributions['marital_status'][age_group] = {k: v/total for k, v in distributions['marital_status'][age_group].items()}
+            
+            if validate_distributions_with_age_groups(distributions):
                 return distributions
+            else:
+                raise ValueError("Returned distributions failed validation")
         except json.JSONDecodeError as e:
             print(f"JSON parsing error: {e}")
             raise ValueError(f"Failed to parse LLM response: {e}")
@@ -96,6 +123,49 @@ def query_llm(year: int) -> Dict[str, Dict[str, float]]:
         print(f"Error: {str(e)}")
         raise RuntimeError(f"LLM query failed: {e}")
 
+def validate_distributions_with_age_groups(distributions: Dict[str, Dict[str, float]]) -> bool:
+    """
+    Validate that distributions are properly formatted and sum to 1.0
+    """
+    if not isinstance(distributions, dict):
+        return False
+
+    # Validate gender distribution
+    gender_dist = distributions.get("gender", {})
+    if set(gender_dist.keys()) != {"F", "M"}:
+        return False
+    if not all(isinstance(v, (int, float)) for v in gender_dist.values()):
+        return False
+    if not abs(sum(gender_dist.values()) - 1.0) < 0.001:
+        return False
+
+    # Validate religion distribution
+    religion_dist = distributions.get("religion", {})
+    if not all(isinstance(v, (int, float)) for v in religion_dist.values()):
+        return False
+    if not abs(sum(religion_dist.values()) - 1.0) < 0.001:
+        return False
+
+    # Validate marital status distributions for each age group
+    marital_status = distributions.get("marital_status", {})
+    expected_age_groups = ["age_16_19", "age_20_24", "age_25_34", "age_35_plus"]
+    expected_marital_statuses = {
+        "Single", "Married", "Common-Law", "Separated", "Divorced", "Other"
+    }
+    
+    for age_group in expected_age_groups:
+        if age_group not in marital_status:
+            return False
+            
+        age_dist = marital_status[age_group]
+        if set(age_dist.keys()) != expected_marital_statuses:
+            return False
+        if not all(isinstance(v, (int, float)) for v in age_dist.values()):
+            return False
+        if not abs(sum(age_dist.values()) - 1.0) < 0.001:
+            return False
+
+    return True
 
 def generate_student_ids(num_students):
     """
@@ -313,6 +383,19 @@ def get_degree_probabilities(year: int, degree_probs: dict) -> tuple:
     probabilities = list(probs.values())
     return degrees, probabilities
 
+def get_age_group(dob_str, admit_year):
+    """Determine age group based on date of birth and admission year"""
+    birth_year = int(dob_str.split('-')[0])
+    age = admit_year - birth_year
+    
+    if age <= 19:
+        return "age_16_19"
+    elif age <= 24:
+        return "age_20_24"
+    elif age <= 34:
+        return "age_25_34"
+    else:
+        return "age_35_plus"
 
 def main():
     random.seed(42)
@@ -362,13 +445,16 @@ def main():
             admit_sem = 1
             term_codes = generate_term_codes(admit_year, admit_sem)
             dob = generate_dob(admit_year)
+            age_group = get_age_group(dob, admit_year)
 
             # Use cached distributions
             year_dist = distributions[admit_year]
+            
+            # Select marital status from age-specific distribution
             marital_status = random.choices(
-                list(year_dist["marital_status"].keys()),
-                weights=list(year_dist["marital_status"].values()),
-                k=1,
+                list(year_dist["marital_status"][age_group].keys()),
+                weights=list(year_dist["marital_status"][age_group].values()),
+                k=1
             )[0]
 
             faculty_code = "FSA" if int(term_codes[0][:4]) <= 2012 else "FST"
