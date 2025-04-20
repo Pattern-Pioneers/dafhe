@@ -88,4 +88,4 @@ print(f"\nTotal Unique Students: {total_students_all}")
 # Additional breakdown by admission year
 year_counts = df['ADMIT_YEAR'].value_counts().sort_index()
 print("\nEnrollment Counts by Admit Year:")
-print(year_counts.to_string())
+print(year_counts.to_string()
