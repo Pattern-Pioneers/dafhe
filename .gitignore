@@ -1,3 +1,12 @@
 dafhe.Rproj
 .Rproj.user
 notebooks/generators_files
+plots/*
+scripts/__pycache__/*
+scripts/tests/__pycache__/*
+.env
+*.png
+*.html
+*.csv
+notebooks/enrollment_files
+notebooks/enrollment_generator_files

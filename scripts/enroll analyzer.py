@@ -1,13 +1,17 @@
 import pandas as pd
-# import datetime
 from tqdm import tqdm
+import os
 
-# Enable tqdm for pandas operations
-tqdm.pandas()
+"""
+Enrollment Analyzer:
+Reads enrollment CSV, computes age and gender stats per degree code,
+and displays summary tables.
+"""
 
 # Read the CSV file
 print("Reading CSV file...")
-df = pd.read_csv('25years enrollment sample.csv')
+file_path = os.path.join(os.path.dirname(__file__), 'demoenrollFASTER.csv')
+df = pd.read_csv(file_path)
 
 # Clean column names
 df.columns = df.columns.str.strip()
@@ -20,43 +24,68 @@ df['DATE_OF_BIRTH'] = pd.to_datetime(df['DATE_OF_BIRTH'])
 df['ADMIT_YEAR'] = df['TERM_CODE_ADMIT'].astype(str).str[:4].astype(int)
 df['ADMIT_SEMESTER'] = df['TERM_CODE_ADMIT'].astype(str).str[4:].astype(int)
 
-# Calculate enrollment date (approximate to middle of semester)
+# Calculate enrollment dates
 print("Calculating enrollment dates...")
-semester_month = {10: 9, 20: 1, 30: 5}  # Updated: Sem 1 (10) = Sept, Sem 2 (20) = Jan, Sem 3 (30) = May
-df['ENROLL_DATE'] = df.progress_apply(lambda x: pd.Timestamp(year=x['ADMIT_YEAR'], 
-                                                   month=semester_month[x['ADMIT_SEMESTER']], 
-                                                   day=1), axis=1)
+semester_month = {10: 9, 20: 1, 30: 5}
+df['ENROLL_MONTH'] = df['ADMIT_SEMESTER'].map(semester_month)
+df['ENROLL_DATE'] = pd.to_datetime(dict(
+    year=df['ADMIT_YEAR'],
+    month=df['ENROLL_MONTH'],
+    day=1
+))
+df.drop(columns=['ENROLL_MONTH'], inplace=True)
 
 # Calculate age at enrollment
 print("Calculating ages...")
 df['AGE_AT_ENROLLMENT'] = (df['ENROLL_DATE'] - df['DATE_OF_BIRTH']).dt.total_seconds() / (365.25 * 24 * 60 * 60)
 
-# Group by degree code and calculate statistics
-enrollment_stats = df.groupby('STU_DEGREE_CODE').agg({
-    'STUDENT_ID': 'nunique',  # Count unique students
-    'AGE_AT_ENROLLMENT': 'mean',
-}).reset_index()
-
-# Calculate gender counts for unique students
-gender_counts = df.drop_duplicates('STUDENT_ID').groupby('STU_DEGREE_CODE')['GENDER'].value_counts().unstack(fill_value=0)
-
-# Merge all statistics
-result = pd.merge(enrollment_stats, gender_counts, on='STU_DEGREE_CODE')
-result.columns = ['Degree_Code', 'Total_Students', 'Avg_Age', 'Female', 'Male']
-result['Avg_Age'] = result['Avg_Age'].round(1)
-
-# Reorder columns
-result = result[['Degree_Code', 'Male', 'Female', 'Total_Students', 'Avg_Age']]
-
-# Sort by total students in descending order
-result = result.sort_values('Total_Students', ascending=False)
-
-# Add percentage of total
-total_students = result['Total_Students'].sum()
-result['Percentage'] = (result['Total_Students'] / total_students * 100).round(1)
+"""
+Compute detailed per-degree statistics with progress bar
+"""
+degree_codes = df['STU_DEGREE_CODE'].unique()
+total_students_all = df['STUDENT_ID'].nunique()
+stats = []
+for code in tqdm(degree_codes, desc='Aggregating stats per degree'):
+    sub = df[df['STU_DEGREE_CODE'] == code]
+    total_students = sub['STUDENT_ID'].nunique()
+    ages = sub['AGE_AT_ENROLLMENT']
+    # basic stats
+    avg_age = round(ages.mean(), 1)
+    median_age = round(ages.median(), 1)
+    std_age = round(ages.std(), 1)
+    # additional stats
+    min_age = round(ages.min(), 1)
+    max_age = round(ages.max(), 1)
+    q1 = round(ages.quantile(0.25), 1)
+    q3 = round(ages.quantile(0.75), 1)
+    # gender counts
+    gender_counts = sub.drop_duplicates('STUDENT_ID')['GENDER'].value_counts()
+    female = int(gender_counts.get('F', 0))
+    male = int(gender_counts.get('M', 0))
+    # percent of total
+    pct_total = round(total_students / total_students_all * 100, 1)
+    stats.append({
+        'Degree_Code': code,
+        'Total_Students': total_students,
+        'Pct_of_Total': pct_total,
+        'Male': male,
+        'Female': female,
+        'Avg_Age': avg_age,
+        'Median_Age': median_age,
+        'Std_Age': std_age,
+        'Min_Age': min_age,
+        'Max_Age': max_age,
+        'Q1_Age': q1,
+        'Q3_Age': q3,
+    })
+result = pd.DataFrame(stats).sort_values('Total_Students', ascending=False)
 
 # Display results
-print("\nEnrollment Distribution by Degree Code:")
-print("==============================================================")
-print(result.to_string(index=True))
-print(f"\nTotal Unique Students: {total_students}")
+print("\nDetailed Enrollment Stats by Degree Code:")
+print(result.to_string(index=False))
+print(f"\nTotal Unique Students: {total_students_all}")
+
+# Additional breakdown by admission year
+year_counts = df['ADMIT_YEAR'].value_counts().sort_index()
+print("\nEnrollment Counts by Admit Year:")
+print(year_counts.to_string()
