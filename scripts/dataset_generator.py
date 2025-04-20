@@ -1,5 +1,4 @@
 from tqdm import tqdm
-import csv
 import random
 from datetime import date
 import faker
@@ -21,27 +20,28 @@ LLM_MODELS = [
     "google/learnlm-1.5-pro-experimental:free",
 ]
 
+BASE_DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'real_stats'))
+
 logging.basicConfig(
     level=logging.INFO,
-    format='%(levelname)s - %(message)s'
+    format='%(message)s'
 )
 logger = logging.getLogger(__name__)
 
 load_dotenv()
 fake = faker.Faker()
 
+API_KEY = os.getenv("OPENROUTER_API_KEY")
+if not API_KEY:
+    raise ValueError("OPENROUTER_API_KEY environment variable not set")
+client = OpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=API_KEY,
+    default_headers={"X-Title": "DAFHE Data Generation"},
+)
+
 def query_llm(year: int, model: str = None, use_historical_data: bool = False, historical_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Query LLM for demographic distributions of a given year."""
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        raise ValueError("OPENROUTER_API_KEY environment variable not set")
-
-    client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=api_key,
-        default_headers={"X-Title": "DAFHE Data Generation"},
-    )
-    
     models = LLM_MODELS
     if model is not None:
         models_to_try = [model]
@@ -325,75 +325,60 @@ def validate_distributions(distributions: Dict[str, Any], include_degree_distrib
 
 
 def precompute_distributions(
-    min_year: int, 
-    max_year: int, 
-    retry_count: int = 3,  
+    min_year: int,
+    max_year: int,
+    retry_count: int = 3,
     use_historical_data: bool = False
 ) -> Dict[int, Dict[str, Any]]:
     """Precompute LLM demographic distributions across a range of years."""
-    logger.info(f"Pre-computing demographic distributions (parallelized, use_historical_data={use_historical_data})...")
-    
+    logger.info(f"Precomputing demographic distributions for years {min_year}-{max_year} (use_historical_data={use_historical_data})...")
     # Prepare historical data if needed
-    historical_data = None
-    if use_historical_data:
-        historical_data = load_historical_data()
-        logger.info("Loaded historical data to guide LLM generation")
-    
-    years = list(range(min_year, max_year + 1))
+    historical_data = load_historical_data() if use_historical_data else None
     models = LLM_MODELS
-    distributions = {}
-    max_workers = min(len(models), 4)  
-
-    def query_with_retries(year, model):
-        # Get historical data for this specific year if available
-        year_historical_data = get_historical_data_for_year(historical_data, year) if historical_data else None
-        
-        # Keep trying with different models until successful
-        return year, query_llm(year, model=model, use_historical_data=use_historical_data, historical_data=year_historical_data)
-    
+    years = list(range(min_year, max_year + 1))
     assignments = [(year, models[i % len(models)]) for i, year in enumerate(years)]
-    
-    # Process years sequentially at first to ensure we get past any initial setup issues
-    for year, model in assignments[:2]:
-        try:
-            year, dist = query_with_retries(year, model)
-            distributions[year] = dist
-            logger.info(f"Successfully generated distribution for year {year}")
-        except Exception as e:
-            logger.error(f"Failed to generate distributions for year {year}: {e}")
-            raise  
-    
-    # Then process the rest in parallel
-    remaining_assignments = assignments[2:]
-    if remaining_assignments:
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_year = {executor.submit(query_with_retries, year, model): (year, model) for year, model in remaining_assignments}
-            for future in as_completed(future_to_year):
-                year, model = future_to_year[future]
-                try:
-                    year, dist = future.result()
-                    distributions[year] = dist
-                    logger.info(f"Successfully generated distribution for year {year}")
-                except Exception as e:
-                    logger.error(f"Failed to generate distributions for year {year} with model {model}: {e}")
-                    raise RuntimeError(f"Could not generate valid distribution for year {year} after multiple attempts")
-                
+    distributions: Dict[int, Dict[str, Any]] = {}
+    # Parallelize all LLM calls
+    max_workers = min(len(assignments), len(models) * 4)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_year = {
+            executor.submit(
+                lambda y, m: (y, query_llm(
+                    y,
+                    model=m,
+                    use_historical_data=use_historical_data,
+                    historical_data=get_historical_data_for_year(historical_data, y) if historical_data else None
+                )),
+                year,
+                model
+            ): year
+            for year, model in assignments
+        }
+        for future in as_completed(future_to_year):
+            year = future_to_year[future]
+            try:
+                _, dist = future.result()
+                distributions[year] = dist
+                logger.info(f"✓ Generated distribution for {year}")
+            except Exception as e:
+                logger.error(f"Failed to generate distribution for {year}: {e}")
+                raise
     return dict(sorted(distributions.items()))
 
 
 def load_historical_data() -> Dict[str, Any]:
-    """Load historical demographic data from /real stats."""
-    logger.info("Loading historical data from real stats directory...")
+    """Load historical demographic data from /real_stats."""
+    logger.info("Loading historical data from real_stats directory...")
     data = {}
     try:
-        deg_data = pd.read_csv(r"real stats/degree_enrollment_gender.csv")
+        deg_data = pd.read_csv(os.path.join(BASE_DATA_DIR, "degree_enrollment_gender.csv"))
         data['gender'] = deg_data
         data['program'] = deg_data
         logger.info("Loaded degree enrollment (with gender) data")
     except Exception as e:
         logger.warning(f"Could not load degree enrollment gender data: {e}")
     try:
-        country_data = pd.read_csv(r"real stats/country_stats_with_probabilities.csv")
+        country_data = pd.read_csv(os.path.join(BASE_DATA_DIR, "country_stats_with_probabilities.csv"))
         data['country'] = country_data
         logger.info("Loaded country distribution data")
     except Exception as e:
@@ -474,7 +459,7 @@ def get_historical_data_for_year(historical_data: Dict[str, Any], year: int) -> 
 
 def load_degree_probabilities(variation_level: float = 0.15) -> Dict[int, Dict[str, float]]:
     """Load and optionally vary degree enrollment probabilities."""
-    df = pd.read_csv(r"real stats/degree_enrollment_gender.csv")
+    df = pd.read_csv(os.path.join(BASE_DATA_DIR, "degree_enrollment_gender.csv"))
     prob_data = {}
     degree_total_cols = [
         "CS-MAJ-TOTAL", "CS-SPE-TOTAL", "CS-MAN-TOTAL", "IT-MAJ-TOTAL", "IT-SPE-TOTAL"
@@ -531,20 +516,21 @@ def generate_student_ids(num_students: int) -> List[int]:
 
 def load_country_probabilities() -> Dict[str, float]:
     """Load country probability distribution from CSV."""
-    df = pd.read_csv(r"real stats/country_stats_with_probabilities.csv")
+    df = pd.read_csv(os.path.join(BASE_DATA_DIR, "country_stats_with_probabilities.csv"))
     return dict(zip(df["iso3"], df["probability"]))
 
 
 def prepare_location_data() -> Tuple[
-    pd.DataFrame, Dict[str, Tuple[pd.DataFrame, Optional[pd.Series]]], List[str], List[float]
+    pd.DataFrame, Dict[str, Tuple[List[Tuple[str, str, str]], Optional[List[float]]]], List[str], List[float]
 ]:
     """Cache and prepare location/city data."""
-    worldcities_df = pd.read_csv(r"real stats/worldcities.csv")
+    worldcities_df = pd.read_csv(os.path.join(BASE_DATA_DIR, "worldcities.csv"))
     worldcities_df["population"] = pd.to_numeric(
         worldcities_df["population"], errors="coerce"
     ).fillna(0)
 
     # Load country probabilities and filter cities
+    logger.info("Loading country probabilities and filtering cities...")
     country_probs = load_country_probabilities()
     valid_nations = list(country_probs.keys())
     worldcities_df = worldcities_df[worldcities_df["iso3"].isin(valid_nations)]
@@ -555,11 +541,16 @@ def prepare_location_data() -> Tuple[
     valid_nations = []
 
     for nation in worldcities_df["iso3"].unique():
-        nation_cities = worldcities_df[worldcities_df["iso3"] == nation]
-        total_pop = nation_cities["population"].sum()
-
-        weights = nation_cities["population"] / total_pop if total_pop > 0 else None
-        city_cache[nation] = (nation_cities, weights)
+        df_n = worldcities_df[worldcities_df["iso3"] == nation]
+        total_pop = df_n["population"].sum()
+        # store Python lists for faster sampling
+        locations = list(zip(
+            df_n["city_ascii"].tolist(),
+            df_n["admin_name"].tolist(),
+            df_n["country"].tolist()
+        ))
+        weights = (df_n["population"] / total_pop).tolist() if total_pop > 0 else None
+        city_cache[nation] = (locations, weights)
         valid_nations.append(nation)
         nation_probs.append(country_probs.get(nation, 0.0))
 
@@ -630,7 +621,7 @@ def main():
     """Main function to generate and save dataset based on parameters."""
     seed_input = input("Enter random seed for reproducibility (blank for random): ")
     seed = int(seed_input) if seed_input.strip() else random.SystemRandom().randint(0, 2**32 - 1)
-    print(f"Using RNG seed: {seed}")
+    logger.info(f"Using RNG seed: {seed}")
     random.seed(seed)
     np.random.seed(seed)
 
@@ -679,90 +670,52 @@ def main():
         # Preload fallback degree probabilities once to optimize performance
         fallback_degree_probs = load_degree_probabilities()
 
-        # Generate records
+        # Generate student records in bulk via pandas
         logger.info("Generating student records...")
-        with open(output_file, mode="w", newline="", encoding="utf-8") as csv_file:
-            writer = csv.writer(csv_file)
-            writer.writerow([
-                "STUDENT_ID", "TERM_CODE_EFF", "TERM_CODE_ADMIT",
-                "DATE_OF_BIRTH", "CITY", "STATE", "NATION",
-                "GENDER", "RELIGION", "MARITAL_STATUS",
-                "FACULTY_CODE", "STU_DEGREE_CODE",
-            ])
-
-            for sid in tqdm(student_ids, desc="Generating records"):
-                # Basic student attributes
-                admit_year = random.randint(min_year, max_year)
-                term_code_admit = f"{admit_year}10"
-                admit_sem = 1
-                term_codes = generate_term_codes(admit_year, admit_sem, summer_rate)
-                dob = generate_dob(admit_year)
-                age_group = get_age_group(dob, admit_year)
-                faculty_code = "FSA" if int(term_codes[0][:4]) <= 2012 else "FST"
-
-                # Use demographic distributions
-                year_dist = distributions[admit_year]
-
-                # Select demographics based on distributions
-                gender = random.choices(
-                    list(year_dist["gender"].keys()),
-                    weights=list(year_dist["gender"].values()),
-                    k=1,
-                )[0]
-
-                religion = random.choices(
-                    list(year_dist["religion"].keys()),
-                    weights=list(year_dist["religion"].values()),
-                    k=1,
-                )[0]
-
-                marital_status = random.choices(
-                    list(year_dist["marital_status"][age_group].keys()),
-                    weights=list(year_dist["marital_status"][age_group].values()),
-                    k=1,
-                )[0]
-
-                # Degree selection using LLM-generated distribution when available
-                if not use_historical_data and "degree_distribution" in year_dist:
-                    degree_programs = list(year_dist["degree_distribution"].keys())
-                    degree_weights = list(year_dist["degree_distribution"].values())
-                    degree_code = random.choices(degree_programs, weights=degree_weights, k=1)[0]
-                else:
-                    # Fall back to historical degree distributions
-                    degrees, probabilities = get_degree_probabilities(admit_year, fallback_degree_probs)
-                    degree_code = random.choices(degrees, weights=probabilities, k=1)[0]
-
-                # Location selection
-                chosen_nation = random.choices(valid_nations, weights=nation_probs, k=1)[0]
-                nation_cities, weights = city_cache[chosen_nation]
-
-                if weights is not None:
-                    selected_city = nation_cities.sample(n=1, weights=weights).iloc[0]
-                else:
-                    selected_city = nation_cities.sample(1).iloc[0]
-
-                city = selected_city["city_ascii"]
-                state = selected_city["admin_name"]
-                nation_value = selected_city["country"]
-
-                # Write records for each semester
-                for term_eff in term_codes:
-                    writer.writerow(
-                        [
-                            sid,
-                            term_eff,
-                            term_code_admit,
-                            dob,
-                            city,
-                            state,
-                            nation_value,
-                            gender,
-                            religion,
-                            marital_status,
-                            faculty_code,
-                            degree_code,
-                        ]
-                    )
+        rows = []
+        for sid in tqdm(student_ids, desc="Generating student records"):
+            # Basic student attributes
+            admit_year = random.randint(min_year, max_year)
+            term_code_admit = f"{admit_year}10"
+            admit_sem = 1
+            term_codes = generate_term_codes(admit_year, admit_sem, summer_rate)
+            dob = generate_dob(admit_year)
+            age_group = get_age_group(dob, admit_year)
+            faculty_code = "FSA" if int(term_codes[0][:4]) <= 2012 else "FST"
+            year_dist = distributions[admit_year]
+            gender = random.choices(list(year_dist["gender"].keys()), weights=list(year_dist["gender"].values()), k=1)[0]
+            religion = random.choices(list(year_dist["religion"].keys()), weights=list(year_dist["religion"].values()), k=1)[0]
+            marital_status = random.choices(list(year_dist["marital_status"][age_group].keys()), weights=list(year_dist["marital_status"][age_group].values()), k=1)[0]
+            if not use_historical_data and "degree_distribution" in year_dist:
+                degree_programs = list(year_dist["degree_distribution"].keys())
+                degree_weights = list(year_dist["degree_distribution"].values())
+                degree_code = random.choices(degree_programs, weights=degree_weights, k=1)[0]
+            else:
+                degrees, probabilities = get_degree_probabilities(admit_year, fallback_degree_probs)
+                degree_code = random.choices(degrees, weights=probabilities, k=1)[0]
+            chosen_nation = random.choices(valid_nations, weights=nation_probs, k=1)[0]
+            locations, loc_weights = city_cache[chosen_nation]
+            if loc_weights:
+                city, state, nation_value = random.choices(locations, weights=loc_weights, k=1)[0]
+            else:
+                city, state, nation_value = random.choice(locations)
+            for term_eff in term_codes:
+                rows.append({
+                    "STUDENT_ID": sid,
+                    "TERM_CODE_EFF": term_eff,
+                    "TERM_CODE_ADMIT": term_code_admit,
+                    "DATE_OF_BIRTH": dob,
+                    "CITY": city,
+                    "STATE": state,
+                    "NATION": nation_value,
+                    "GENDER": gender,
+                    "RELIGION": religion,
+                    "MARITAL_STATUS": marital_status,
+                    "FACULTY_CODE": faculty_code,
+                    "STU_DEGREE_CODE": degree_code,
+                })
+        df = pd.DataFrame(rows)
+        df.to_csv(output_file, index=False)
 
         elapsed_time = time.time() - start_time
         logger.info(f"Completed successfully in {elapsed_time:.2f} seconds.")
@@ -772,3 +725,6 @@ def main():
     except Exception as e:
         logger.error(f"Error during execution: {e}", exc_info=True)
         logger.error(f"An error occurred: {e}")
+        
+if __name__ == "__main__":
+    main()

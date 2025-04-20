@@ -7,5 +7,6 @@ scripts/tests/__pycache__/*
 .env
 *.png
 *.html
+*.csv
 notebooks/enrollment_files
 notebooks/enrollment_generator_files
